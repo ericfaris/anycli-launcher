@@ -1062,12 +1062,15 @@ _ac_parse_cli_flags() {
         fi
     fi
 
-    # Run help and parse flags
+    # Run help and parse flags. Bounded by a hard timeout -- some CLIs' --help
+    # blocks on a first-run prompt, login flow, or slow network version check
+    # instead of returning immediately, which would otherwise hang this whole
+    # menu waiting on it forever.
     local help_output=""
     if [[ -n "$subcmd" ]]; then
-        help_output=$("$tool" "$subcmd" --help 2>/dev/null || "$tool" --help 2>/dev/null || echo "")
+        help_output=$(_ac_timeout 5 "$tool" "$subcmd" --help 2>/dev/null || _ac_timeout 5 "$tool" --help 2>/dev/null || echo "")
     else
-        help_output=$("$tool" --help 2>/dev/null || echo "")
+        help_output=$(_ac_timeout 5 "$tool" --help 2>/dev/null || echo "")
     fi
 
     if [[ -z "$help_output" ]]; then

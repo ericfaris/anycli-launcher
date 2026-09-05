@@ -571,6 +571,26 @@ assert_contains "persist: contains default_flags" 'default_flags: "--trust-all-t
 assert_contains "persist: contains project entry" '"testproj":' "$written"
 assert_contains "persist: contains project flags" 'flags: "--agent mechanic"' "$written"
 
+# ═══════════════════════════════════════
+echo "── Regression: _ac_tildify (home-relative path display/storage) ──"
+
+# "${v/#$HOME/\~}" -- the idiom this replaced -- produces a literal "\~"
+# under zsh instead of "~" (bash handles the same escape correctly), which
+# silently corrupted projects_dir and every other home-relative path written
+# to config.yaml whenever this ran under zsh. This file only runs under
+# bash, so it can't reproduce that specific shell difference directly, but
+# it locks in _ac_tildify's contract on the shell that does run here; the
+# zsh CI smoke check exercises the actual write path under real zsh.
+assert_eq "tildify: replaces a leading \$HOME" "~/myprojects" "$(_ac_tildify "$HOME/myprojects")"
+assert_eq "tildify: leaves non-\$HOME paths untouched" "/tmp/other" "$(_ac_tildify "/tmp/other")"
+assert_eq "tildify: bare \$HOME becomes just ~" "~" "$(_ac_tildify "$HOME")"
+assert_eq "tildify: empty input stays empty" "" "$(_ac_tildify "")"
+if [[ "$(_ac_tildify "$HOME/myprojects")" != *'\'* ]]; then
+    printf '  \e[32m✓\e[0m tildify: result never contains a stray backslash\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m tildify: result contains a stray backslash\n'; ((FAIL++))
+fi
+
 # Test: round-trip (write then read back)
 _AC_PROJECTS_DIR=""
 _AC_CLI_FLAGS=""
@@ -764,6 +784,35 @@ if [[ "$parsed" != *"--version"* ]]; then
 else
     printf '  \e[31m✗\e[0m flags: --version should be filtered\n'; ((FAIL++))
 fi
+
+# ═══════════════════════════════════════
+echo "── Regression: config menu must not hang on a slow/hanging --help ──"
+
+# _ac_parse_cli_flags ran "$tool --help" with no timeout, so a CLI whose
+# --help blocks (first-run prompt, login flow, slow network version check)
+# froze the entire config menu waiting on it forever. Confirm it now returns
+# promptly (bounded by _ac_timeout) against a --help that never returns.
+cat > "$MOCK_BIN/hangy-cli" << 'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "--help" ]]; then
+    sleep 999
+fi
+EOF
+chmod +x "$MOCK_BIN/hangy-cli"
+rm -f /tmp/ac-flags-hangy-cli.cache
+
+_hang_start=$(date +%s)
+timeout 20 bash -c '
+    source "'"$PROJECT_DIR"'/anycli.bash"
+    _ac_parse_cli_flags hangy-cli ""
+' >/dev/null 2>&1
+_hang_elapsed=$(( $(date +%s) - _hang_start ))
+if (( _hang_elapsed < 15 )); then
+    printf '  \e[32m✓\e[0m hang-guard: returned in %ss, well under the 20s outer timeout\n' "$_hang_elapsed"; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m hang-guard: took %ss -- did not bail out on the hanging --help\n' "$_hang_elapsed"; ((FAIL++))
+fi
+rm -f /tmp/ac-flags-hangy-cli.cache
 
 # Restore
 _AC_CLI_TOOL="kiro-cli"
@@ -2743,6 +2792,14 @@ _AC_LAUNCHER_UPDATE_AVAILABLE=0
 # ═══════════════════════════════════════
 echo "── Regression: kiro-cli update no -y flag ──"
 
+# _ac_do_update now runs "$_AC_CLI_TOOL update" rather than a hardcoded
+# "kiro-cli update" (it's only reachable when _AC_CLI_TOOL is "kiro-cli" in
+# the first place -- see _ac_update_probe), so it must be set explicitly
+# here rather than relying on it surviving from earlier in the file. The
+# _ac_load_config call a few tests up reset it to "" (anycli's default is no
+# privileged CLI), which is exactly the kind of regression this guards.
+_AC_CLI_TOOL="kiro-cli"
+
 # Test: _ac_do_update does NOT pass -y to kiro-cli update
 # Create a mock kiro-cli that logs exact arguments
 cat > "$MOCK_BIN/kiro-cli" << 'MOCK'
@@ -4001,6 +4058,87 @@ assert_eq "probe: atomic cache write leaves no temp files" "0" "$tmp_left"
 _AC_UPDATE_CACHE="$_ac_upd_cache_saved"
 _AC_SCRIPT_DIR="$_ac_upd_dir_saved"
 rm -rf "$UPD_TMP"
+
+# ═══════════════════════════════════════
+echo "── Regression: CLI update check is scoped to the configured tool ──"
+
+# _ac_update_probe used to check `command -v kiro-cli` -- i.e. whether
+# kiro-cli happened to be installed at all -- regardless of which CLI the
+# user actually configured. A claude/aider/etc. user with kiro-cli also on
+# PATH got a misleading "kiro-cli update available" nag for a tool they
+# don't use. It must now check the *configured* tool's identity instead.
+DYN_TMP=$(mktemp -d)
+_dyn_cache_saved="$_AC_UPDATE_CACHE"
+_dyn_dir_saved="$_AC_SCRIPT_DIR"
+_dyn_tool_saved="$_AC_CLI_TOOL"
+_AC_UPDATE_CACHE="$DYN_TMP/.update-check"
+_AC_SCRIPT_DIR="$DYN_TMP/nogit"     # no .git, so the launcher-update leg is skipped
+mkdir -p "$_AC_SCRIPT_DIR"
+_AC_TRACKED_APP_NAMES=()
+
+# kiro-cli is on PATH (mocked below, logging every invocation) but NOT the
+# configured tool. Checking the resulting cache alone wouldn't prove the gate
+# actually did anything -- a mocked curl failure would leave
+# CLI_UPDATE_AVAILABLE=0 either way -- so this checks whether kiro-cli was
+# ever invoked at all via an explicit call log.
+DYN_KIRO_LOG="$DYN_TMP/kiro-called.log"
+cat > "$MOCK_BIN/kiro-cli" << MOCK
+#!/usr/bin/env bash
+echo "\$*" >> "$DYN_KIRO_LOG"
+if [[ "\$1" == "--version" ]]; then echo "kiro-cli 1.0.0"; exit 0; fi
+MOCK
+chmod +x "$MOCK_BIN/kiro-cli"
+cat > "$MOCK_BIN/curl" << 'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+chmod +x "$MOCK_BIN/curl"
+
+_AC_CLI_TOOL="claude"
+rm -f "$DYN_KIRO_LOG"
+_ac_update_probe >/dev/null 2>&1 || true
+if [[ ! -f "$DYN_KIRO_LOG" ]]; then
+    printf '  \e[32m✓\e[0m update-scope: claude configured -> kiro-cli never invoked\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m update-scope: claude configured -> kiro-cli should not be invoked\n    actual: %s\n' "$(cat "$DYN_KIRO_LOG")"; ((FAIL++))
+fi
+
+# Same PATH, but kiro-cli IS the configured tool -- the check must actually
+# run (curl still fails gracefully; what's under test is that the gate lets
+# the check reach kiro-cli at all, not the update-available result itself).
+_AC_CLI_TOOL="kiro-cli"
+rm -f "$DYN_KIRO_LOG"
+_ac_update_probe >/dev/null 2>&1 || true
+assert_contains "update-scope: kiro-cli configured -> kiro-cli --version invoked" "--version" "$(cat "$DYN_KIRO_LOG" 2>/dev/null || echo "")"
+
+# The footer/config-menu update messages must name the configured tool
+# dynamically, not a hardcoded "kiro-cli" literal.
+_AC_CLI_UPDATE_AVAILABLE=1
+_AC_CLI_LATEST_VERSION="9.9.9"
+_AC_LAUNCHER_UPDATE_AVAILABLE=0
+update_prompt=$(echo "n" | _ac_do_update 2>/dev/null || true)
+assert_contains "update-scope: prompt names the configured tool" "Update kiro-cli/launcher" "$update_prompt"
+assert_contains "update-scope: banner names the configured tool" "kiro-cli" "$update_prompt"
+_AC_CLI_UPDATE_AVAILABLE=0
+
+_AC_UPDATE_CACHE="$_dyn_cache_saved"
+_AC_SCRIPT_DIR="$_dyn_dir_saved"
+_AC_CLI_TOOL="$_dyn_tool_saved"
+rm -f "$MOCK_BIN/curl"
+rm -rf "$DYN_TMP"
+
+# Restore the default kiro-cli mock -- later sections depend on its
+# KIRO_CALLED logging behavior, which the stripped-down --version-only mock
+# above doesn't provide.
+cat > "$MOCK_BIN/kiro-cli" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+    echo "kiro-cli 2.16.1"
+    exit 0
+fi
+echo "KIRO_CALLED: $*" >> "${LK_TEST_LOG:-/tmp/ac-test.log}"
+MOCK
+chmod +x "$MOCK_BIN/kiro-cli"
 
 # ═══════════════════════════════════════
 echo "── Update: launcher self-update guards ──"

@@ -2588,12 +2588,15 @@ _ac_semver_compare() {
 }
 
 _ac_check_cli_update_via_index() {
-    # Check for kiro-cli updates by fetching the remote release index.
+    # Check for kiro-cli updates by fetching the remote release index. Only
+    # called when _AC_CLI_TOOL is "kiro-cli" (see _ac_update_probe) -- this
+    # index and version format are specific to kiro-cli, not a generic
+    # mechanism other CLIs share.
     # More reliable than running `kiro-cli update` which requires a TTY.
     # Sets cli_update (0/1) and cli_version in the calling scope.
     # Works on both Linux and Windows (Git Bash) — requires curl.
     local current_ver
-    current_ver=$(kiro-cli --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
+    current_ver=$("$_AC_CLI_TOOL" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
     if [[ -z "$current_ver" ]]; then
         return 1
     fi
@@ -2658,8 +2661,12 @@ _ac_update_probe() {
     local cli_update=0 cli_version="" launcher_update=0 launcher_behind=""
     local apps_update=0 apps_list=""
 
-    # 1. kiro-cli, via the remote release index
-    if command -v kiro-cli &>/dev/null; then
+    # 1. The configured CLI's own updates, via the remote release index.
+    # This mechanism only exists for kiro-cli -- there's no equivalent public
+    # index for claude/aider/goose/codex/amp/etc. So this checks whether
+    # kiro-cli is what the user actually configured (not merely whether it
+    # happens to also be installed alongside whatever they really use).
+    if [[ "$_AC_CLI_TOOL" == "kiro-cli" ]] && command -v kiro-cli &>/dev/null; then
         _ac_check_cli_update_via_index || true
     fi
 
@@ -2883,15 +2890,18 @@ _ac_do_update() {
 
     local has_core_update=0
 
-    # --- Core updates (kiro-cli + launcher) — auto-applied on confirm ---
+    # --- Core updates ($_AC_CLI_TOOL + launcher) — auto-applied on confirm ---
+    # _AC_CLI_UPDATE_AVAILABLE is only ever set when _AC_CLI_TOOL is
+    # "kiro-cli" (see _ac_update_probe) -- that's the only tool this has a
+    # known update mechanism for.
     if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
         has_core_update=1
-        printf "  %s⬆  kiro-cli%s" "$c_warn" "$reset"
+        printf "  %s⬆  %s%s" "$c_warn" "$_AC_CLI_TOOL" "$reset"
         if [[ -n "$_AC_CLI_LATEST_VERSION" ]]; then
             printf "  %s→ %s%s" "$c_name" "$_AC_CLI_LATEST_VERSION" "$reset"
         fi
         local current_ver
-        current_ver=$(kiro-cli --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+        current_ver=$("$_AC_CLI_TOOL" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
         printf "  %s(current: %s)%s\n" "$c_dim" "$current_ver" "$reset"
     fi
 
@@ -2905,13 +2915,13 @@ _ac_do_update() {
     fi
 
     if [[ "$has_core_update" == "1" ]]; then
-        printf "\n  %sUpdate kiro-cli/launcher? (y/n)%s " "$c_prompt" "$reset"
+        printf "\n  %sUpdate %s/launcher? (y/n)%s " "$c_prompt" "$_AC_CLI_TOOL" "$reset"
         local confirm
         read -r confirm
         if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
             printf "\n"
             if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                _ac_spin_verbose "Updating kiro-cli..." kiro-cli update
+                _ac_spin_verbose "Updating $_AC_CLI_TOOL..." "$_AC_CLI_TOOL" update
                 # The header caches the CLI version for the shell's lifetime,
                 # so it must be invalidated or it keeps showing the old one.
                 unset _AC_CLI_VERSION_CACHED
@@ -4182,9 +4192,9 @@ ac() {
             local _ac_update_msg=""
             if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
                 if [[ -n "$_AC_CLI_LATEST_VERSION" ]]; then
-                    _ac_update_msg="kiro-cli ${_AC_CLI_LATEST_VERSION}"
+                    _ac_update_msg="$_AC_CLI_TOOL ${_AC_CLI_LATEST_VERSION}"
                 else
-                    _ac_update_msg="kiro-cli"
+                    _ac_update_msg="$_AC_CLI_TOOL"
                 fi
             fi
             if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then

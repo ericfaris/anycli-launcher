@@ -89,4 +89,28 @@ jobs:
           # which shouldn't fail this smoke test under `zsh -e`.
           doctor_out=$(ac doctor 2>&1) || true
           echo "$doctor_out" | tail -5
+
+          # Regression: "${v/#$HOME/\~}" -- the idiom _ac_tildify replaced --
+          # writes a literal "\~" instead of "~" under zsh (bash handles the
+          # same escape correctly), which corrupted projects_dir and every
+          # other home-relative path in config.yaml. This can only be caught
+          # by actually running under zsh, not in the bash-only test suite.
+          tildified=$(_ac_tildify "$HOME/projects")
+          if [[ "$tildified" == "~/projects" ]]; then
+            echo "OK: _ac_tildify produces ~/projects under zsh"
+          else
+            echo "FAIL: _ac_tildify produced [$tildified] under zsh, expected [~/projects]"
+            exit 1
+          fi
+
+          _AC_PROJECTS_DIR="$HOME/projects"
+          _AC_CLI_TOOL="claude"
+          _AC_CLI_LAUNCH=""
+          _ac_write_config
+          written=$(cat "$_AC_CONFIG_FILE")
+          case "$written" in
+            *'projects_dir: "~/projects"'*) echo "OK: config write produces ~/projects under zsh" ;;
+            *) echo "FAIL: config write corrupted projects_dir under zsh:"; echo "$written"; exit 1 ;;
+          esac
+
           echo "zsh checks passed"

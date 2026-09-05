@@ -372,6 +372,21 @@ _AC_MENU_TIMEOUT="${_AC_MENU_TIMEOUT:-300}"
 # "# sharp" became "title: # sharp" (a comment, i.e. null to any real parser)
 # and a value containing ": " was ambiguous. Always emit a double-quoted
 # scalar with backslash and quote escaped.
+# Replace a leading $HOME with "~" for display/storage -- e.g.
+# "/home/eric/projects" -> "~/projects". Written as an explicit prefix check
+# rather than "${v/#$HOME/\~}": that pattern-substitution idiom handles the
+# escaped tilde differently in bash (produces "~") than in zsh (produces the
+# literal two characters "\~", even under `emulate -L bash` -- this specific
+# escaping quirk isn't one of the things bash emulation changes), so it wrote
+# a broken "\~/projects" into config.yaml whenever this ran under zsh.
+_ac_tildify() {
+    local v="${1:-}"
+    if [[ -n "$HOME" && "$v" == "$HOME"* ]]; then
+        v="~${v#"$HOME"}"
+    fi
+    printf '%s' "$v"
+}
+
 _ac_yaml_quote() {
     local v="${1:-}"
     v="${v//\\/\\\\}"
@@ -859,7 +874,7 @@ _ac_write_config() {
     mkdir -p "$dir"
 
     {
-        echo "projects_dir: $(_ac_yaml_quote "${_AC_PROJECTS_DIR/#$HOME/\~}")"
+        echo "projects_dir: $(_ac_yaml_quote "$(_ac_tildify "$_AC_PROJECTS_DIR")")"
         echo "default_flags: $(_ac_yaml_quote "$_AC_CLI_FLAGS")"
         echo "cli_tool: $(_ac_yaml_quote "$_AC_CLI_TOOL")"
         echo "cli_launch: $(_ac_yaml_quote "$_AC_CLI_LAUNCH")"
@@ -873,7 +888,7 @@ _ac_write_config() {
             echo "extra_dirs:"
             local xd
             for xd in "${_AC_EXTRA_DIRS[@]}"; do
-                echo "  - $(_ac_yaml_quote "${xd/#$HOME/\~}")"
+                echo "  - $(_ac_yaml_quote "$(_ac_tildify "$xd")")"
             done
         fi
         echo ""
@@ -938,7 +953,7 @@ _ac_write_config() {
                 a_file="$(_ac_app_field "$app" version_file)"
                 a_key="$(_ac_app_field "$app" version_key)"
                 a_pat="$(_ac_app_field "$app" version_pattern)"
-                [[ -n "$a_path" ]] && echo "    path: $(_ac_yaml_quote "${a_path/#$HOME/\~}")"
+                [[ -n "$a_path" ]] && echo "    path: $(_ac_yaml_quote "$(_ac_tildify "$a_path")")"
                 [[ -n "$a_file" ]] && echo "    version_file: $(_ac_yaml_quote "$a_file")"
                 [[ -n "$a_key" ]]  && echo "    version_key: $(_ac_yaml_quote "$a_key")"
                 [[ -n "$a_pat" ]]  && echo "    version_pattern: $(_ac_yaml_quote "$a_pat")"
@@ -3609,9 +3624,9 @@ _ac_first_run_wizard() {
     if (( ${#candidates[@]} > 0 )); then
         for cand in "${candidates[@]}"; do
             if [[ "$cand" == "$HOME/projects" ]]; then
-                printf "     %s%d%s  %s  %s(recommended)%s\n" "$c_num" "$i" "$reset" "${cand/#$HOME/\~}" "$c_ok" "$reset"
+                printf "     %s%d%s  %s  %s(recommended)%s\n" "$c_num" "$i" "$reset" "$(_ac_tildify "$cand")" "$c_ok" "$reset"
             else
-                printf "     %s%d%s  %s\n" "$c_num" "$i" "$reset" "${cand/#$HOME/\~}"
+                printf "     %s%d%s  %s\n" "$c_num" "$i" "$reset" "$(_ac_tildify "$cand")"
             fi
             i=$((i+1))
         done
@@ -3748,7 +3763,7 @@ _ac_setup() {
 
     # --- Projects root -----------------------------------------------------
     printf "\n  %s1. Projects directory%s\n" "$c_name" "$reset"
-    printf "     %scurrent: %s%s%s\n" "$c_dim" "$c_ok" "${_AC_PROJECTS_DIR/#$HOME/\~}" "$reset"
+    printf "     %scurrent: %s%s%s\n" "$c_dim" "$c_ok" "$(_ac_tildify "$_AC_PROJECTS_DIR")" "$reset"
     printf "  %s› %s(Enter to keep)%s " "$c_prompt" "$c_dim" "$reset"
     local new_root
     read -r new_root || return 1

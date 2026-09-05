@@ -1,0 +1,4 @@
+# Config without trailing newline
+PROJECTS_DIR=~/dev
+KIRO_FLAGS=--trust-all-tools
+KIRO_FLAGS_beta=--no-interactive

@@ -1,0 +1,25 @@
+projects_dir: ~/dev
+default_flags: --trust-all-tools
+cli_tool: kiro-cli
+cli_launch: chat
+
+projects:
+  beta:
+    flags: --no-interactive
+  my-app:
+    flags: --agent mechanic
+    title: My App
+  v2.core:
+    flags: --no-interactive
+  ml-project:
+    flags: --model=claude --effort=high
+    color: "#00cc66"
+    title: ML Project
+    prompt: help me with ML
+    alias: ML
+  silent:
+    flags: none
+  spacey:
+    flags: "--effort high   --no-interactive"
+  prompted:
+    prompt: help me with this

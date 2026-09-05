@@ -1,0 +1,64 @@
+[
+  {
+    "name": "detects_available_shells",
+    "prompt": "install kiro-launcher",
+    "expected_patterns": [
+      "zsh|bash|PowerShell",
+      "which shell|what shell|shell do you use"
+    ],
+    "description": "Skill should detect available shells and ask user to choose"
+  },
+  {
+    "name": "handles_already_installed",
+    "prompt": "install kiro-launcher for zsh",
+    "expected_patterns": [
+      "already installed|already sourced|Already installed",
+      "zshrc|.zshrc"
+    ],
+    "description": "When kiro-launcher is already in ~/.zshrc, skill should detect and inform user"
+  },
+  {
+    "name": "offers_rc_configuration",
+    "prompt": "I just installed kiro-launcher, now configure it",
+    "expected_patterns": [
+      "projects|directory|root",
+      "flags|kiro-cli"
+    ],
+    "description": "Skill should offer to configure projects directory and Kiro flags"
+  },
+  {
+    "name": "auto_detects_project_dirs",
+    "prompt": "configure kiro-launcher",
+    "expected_patterns": [
+      "projects|directory|PROJECTS_DIR",
+      "config|configure|change"
+    ],
+    "description": "Skill should offer to configure projects directory and show current state"
+  },
+  {
+    "name": "handles_per_project_flags",
+    "prompt": "I want different flags for my-app project",
+    "expected_patterns": [
+      "KIRO_FLAGS_my-app|per-project|my-app",
+      "config|flags"
+    ],
+    "description": "Skill should guide user through per-project flag configuration"
+  },
+  {
+    "name": "writes_config_file",
+    "prompt": "yes, my projects are in ~/dev, use --trust-all-tools as default flags, no per-project overrides",
+    "expected_patterns": [
+      "~/.config/kiro-launcher/config",
+      "PROJECTS_DIR|KIRO_FLAGS"
+    ],
+    "description": "Skill should write the config file and confirm what was written"
+  },
+  {
+    "name": "verifies_kiro_cli_on_path",
+    "prompt": "install kiro-launcher for bash",
+    "expected_patterns": [
+      "kiro-cli"
+    ],
+    "description": "Skill should check if kiro-cli is available and warn if not"
+  }
+]

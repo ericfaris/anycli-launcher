@@ -1,0 +1,4 @@
+# Test-generated artifacts (recreated on every test run; cleaned up on success,
+# but left behind if a run is interrupted).
+tests/.mock-bin/
+tests/.test-kiro.log

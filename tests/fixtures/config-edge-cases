@@ -1,0 +1,20 @@
+# Edge case config for rigorous testing
+PROJECTS_DIR=~/dev
+
+# Default flags
+KIRO_FLAGS=--trust-all-tools
+
+# Hyphenated project name
+KIRO_FLAGS_my-app=--agent mechanic
+
+# Project name with dots
+KIRO_FLAGS_v2.core=--no-interactive
+
+# Value containing = signs
+KIRO_FLAGS_ml-project=--model=claude --effort=high
+
+# Empty override (should override global with nothing)
+KIRO_FLAGS_silent=
+
+# Multiple spaces between flags
+KIRO_FLAGS_spacey=--trust-all-tools   --no-interactive

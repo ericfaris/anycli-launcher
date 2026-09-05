@@ -1,0 +1,8 @@
+# Kiro Launcher test configuration
+PROJECTS_DIR=~/dev
+
+# Default flags passed to all kiro-cli chat invocations
+KIRO_FLAGS=--trust-all-tools
+
+# Per-project flag overrides (keyed by directory name)
+KIRO_FLAGS_beta=--trust-all-tools --no-interactive

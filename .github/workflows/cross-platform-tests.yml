@@ -1,0 +1,78 @@
+name: Cross-platform test suite
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  bash-suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash --version
+        shell: bash
+        run: bash --version
+      - name: Run test suite under bash
+        shell: bash
+        run: bash tests/run-tests.sh
+
+  zsh-source-check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh (Linux only; macOS ships it)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: zsh --version
+        run: zsh --version
+      - name: Source kiro-launcher.bash under zsh and exercise lk
+        shell: zsh -e {0}
+        run: |
+          set -u
+          MOCK_BIN=$(mktemp -d)
+          cat > "$MOCK_BIN/claude" << 'EOF'
+          #!/usr/bin/env bash
+          echo "CLAUDE_CALLED: $*"
+          EOF
+          chmod +x "$MOCK_BIN/claude"
+          export PATH="$MOCK_BIN:$PATH"
+
+          source ./kiro-launcher.bash
+          echo "sourced OK under zsh $ZSH_VERSION"
+
+          mkdir -p /tmp/lk-ci-projects/demo-project
+          export LK_PROJECTS_DIR=/tmp/lk-ci-projects
+
+          menu_output=$(echo "q" | lk 2>&1)
+          echo "$menu_output"
+          for needle in "Kiro Launcher" "terminal" "(root)" "demo-project"; do
+            case "$menu_output" in
+              *"$needle"*) echo "OK: contains '$needle'" ;;
+              *) echo "FAIL: missing '$needle'"; exit 1 ;;
+            esac
+          done
+
+          launch_out=$(echo "3" | lk 2>&1)
+          case "$launch_out" in
+            *"CLAUDE_CALLED:"*) echo "OK: claude invoked" ;;
+            *) echo "FAIL: claude was not invoked"; echo "$launch_out"; exit 1 ;;
+          esac
+
+          resume_out=$(lk resume demo-project 2>&1)
+          case "$resume_out" in
+            *"CLAUDE_CALLED: --continue"*) echo "OK: resume passed --continue" ;;
+            *) echo "FAIL: resume did not pass --continue"; echo "$resume_out"; exit 1 ;;
+          esac
+
+          doctor_out=$(lk doctor 2>&1)
+          echo "$doctor_out" | tail -5
+          echo "zsh checks passed"

@@ -7,7 +7,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-EVALS_FILE="$PROJECT_DIR/.kiro/skills/install-launcher/evals/evals.json"
+EVALS_FILE="$PROJECT_DIR/.kiro/skills/install-anycli/evals/evals.json"
 PASS=0
 FAIL=0
 SKIP=0
@@ -34,7 +34,7 @@ if [[ ! -f "$EVALS_FILE" ]]; then
     exit 1
 fi
 
-bold "══ Skill Eval: install-launcher ══"
+bold "══ Skill Eval: install-anycli ══"
 echo
 
 eval_count=$(jq length "$EVALS_FILE")

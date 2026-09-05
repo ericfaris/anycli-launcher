@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# check-platform.sh — verify kiro-launcher's runtime dependencies and platform
+# check-platform.sh — verify anycli's runtime dependencies and platform
 # capabilities on the current machine. Run this on any OS (Linux, macOS, WSL2,
 # Git Bash) to confirm the launcher — and especially the session-resume feature
 # — will work before relying on it.
@@ -48,7 +48,7 @@ detect_platform() {
 
 PLATFORM="$(detect_platform)"
 
-printf '%skiro-launcher platform check%s\n' "$C_DIM" "$C_RST"
+printf '%sanycli platform check%s\n' "$C_DIM" "$C_RST"
 printf 'Platform: %s\n' "$PLATFORM"
 printf 'Shell: bash %s\n' "${BASH_VERSION:-unknown}"
 
@@ -134,7 +134,7 @@ fi
 head_line "AI CLI"
 # Try to read the configured tool from the user's config; default to kiro-cli.
 CLI_TOOL="kiro-cli"
-CFG="${HOME}/.config/kiro-launcher/config.yaml"
+CFG="${HOME}/.config/anycli/config.yaml"
 if [[ -f "$CFG" ]]; then
     _t="$(grep -E '^cli_tool:' "$CFG" 2>/dev/null | head -1 | sed -E 's/^cli_tool:[[:space:]]*"?([^"]*)"?.*/\1/')"
     [[ -n "$_t" ]] && CLI_TOOL="$_t"
@@ -150,12 +150,12 @@ if have "$CLI_TOOL"; then
             warn "kiro-cli has no --list-sessions" "session-aware menu will show nothing; resume/picker may still work"
         fi
         if kiro-cli chat --help 2>/dev/null | grep -q -- '--resume'; then
-            pass "kiro-cli supports --resume (r<N>, lk resume)"
+            pass "kiro-cli supports --resume (r<N>, ac resume)"
         else
             warn "kiro-cli has no --resume" "resume launch will start fresh"
         fi
         if kiro-cli chat --help 2>/dev/null | grep -q -- '--resume-picker'; then
-            pass "kiro-cli supports --resume-picker (p<N>, lk pick)"
+            pass "kiro-cli supports --resume-picker (p<N>, ac pick)"
         else
             warn "kiro-cli has no --resume-picker" "the session picker will start fresh"
         fi

@@ -34,7 +34,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zsh
       - name: zsh --version
         run: zsh --version
-      - name: Source kiro-launcher.bash under zsh and exercise lk
+      - name: Source anycli.bash under zsh and exercise ac
         shell: zsh -e {0}
         run: |
           set -u
@@ -46,39 +46,39 @@ jobs:
           chmod +x "$MOCK_BIN/claude"
           export PATH="$MOCK_BIN:$PATH"
 
-          source ./kiro-launcher.bash
+          source ./anycli.bash
           echo "sourced OK under zsh $ZSH_VERSION"
 
-          # A fresh runner has no ~/.config/kiro-launcher/config.yaml, and
-          # _lk_load_config (called from inside lk()) resets _LK_CLI_TOOL to
-          # its built-in default regardless of what's set beforehand -- so
-          # the only way to make it pick up "claude" is via a real config
-          # file, same as this project's actual local setup.
-          export _LK_CONFIG_FILE="$(mktemp)"
-          cat > "$_LK_CONFIG_FILE" << 'CFG'
+          # A fresh runner has no ~/.config/anycli/config.yaml, and
+          # _ac_load_config (called from inside ac()) resets _AC_CLI_TOOL to
+          # empty (anycli has no privileged default CLI) regardless of what's
+          # set beforehand -- so the only way to make it pick up "claude" is
+          # via a real config file, same as this project's actual local setup.
+          export _AC_CONFIG_FILE="$(mktemp)"
+          cat > "$_AC_CONFIG_FILE" << 'CFG'
           cli_tool: "claude"
           cli_launch: ""
           CFG
 
-          mkdir -p /tmp/lk-ci-projects/demo-project
-          export LK_PROJECTS_DIR=/tmp/lk-ci-projects
+          mkdir -p /tmp/ac-ci-projects/demo-project
+          export AC_PROJECTS_DIR=/tmp/ac-ci-projects
 
-          menu_output=$(echo "q" | lk 2>&1)
+          menu_output=$(echo "q" | ac 2>&1)
           echo "$menu_output"
-          for needle in "Kiro Launcher" "terminal" "(root)" "demo-project"; do
+          for needle in "anycli" "terminal" "(root)" "demo-project"; do
             case "$menu_output" in
               *"$needle"*) echo "OK: contains '$needle'" ;;
               *) echo "FAIL: missing '$needle'"; exit 1 ;;
             esac
           done
 
-          launch_out=$(echo "3" | lk 2>&1)
+          launch_out=$(echo "3" | ac 2>&1)
           case "$launch_out" in
             *"CLAUDE_CALLED:"*) echo "OK: claude invoked" ;;
             *) echo "FAIL: claude was not invoked"; echo "$launch_out"; exit 1 ;;
           esac
 
-          resume_out=$(lk resume demo-project 2>&1)
+          resume_out=$(ac resume demo-project 2>&1)
           case "$resume_out" in
             *"CLAUDE_CALLED: --continue"*) echo "OK: resume passed --continue" ;;
             *) echo "FAIL: resume did not pass --continue"; echo "$resume_out"; exit 1 ;;
@@ -87,6 +87,6 @@ jobs:
           # Informational only -- doctor legitimately exits non-zero when it
           # flags an environment gap (e.g. no wt.exe on a headless runner),
           # which shouldn't fail this smoke test under `zsh -e`.
-          doctor_out=$(lk doctor 2>&1) || true
+          doctor_out=$(ac doctor 2>&1) || true
           echo "$doctor_out" | tail -5
           echo "zsh checks passed"

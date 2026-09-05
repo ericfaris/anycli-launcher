@@ -1,4 +1,4 @@
-# shellcheck configuration for kiro-launcher
+# shellcheck configuration for anycli
 #
 # Each disabled check below is either an intentional pattern in this codebase or
 # a documented false positive. Everything NOT listed here stays enabled, so real

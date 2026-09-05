@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 
-# kiro-launcher: Interactive project launcher for Kiro CLI
+# anycli: interactive project launcher for any AI CLI
 # Requires: bash 4+ (source from ~/.bashrc)
 #
-# Source: source /path/to/kiro-launcher.bash
+# Source: source /path/to/anycli.bash
 
 # Version and paths
-_LK_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-_LK_VERSION="$(cat "$_LK_SCRIPT_DIR/VERSION" 2>/dev/null || echo "dev")"
+_AC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+_AC_VERSION="$(cat "$_AC_SCRIPT_DIR/VERSION" 2>/dev/null || echo "dev")"
 
 # Portable helpers
 #
 # zsh compatibility note: this file is bash-authored (BASH_REMATCH, 0-based
 # arrays, indirect expansion via ${!name}) but is also sourced from ~/.zshrc.
-# `lk()` below scopes `emulate -L bash` for its whole call tree so the bulk of
+# `ac()` below scopes `emulate -L bash` for its whole call tree so the bulk of
 # the file behaves like bash there, but that only changes *options* — it can't
 # add syntax zsh's parser never learned (${!name}, ${x,,}, compgen, mapfile,
 # read -a). Those specific spots are hand-shimmed with $ZSH_VERSION checks;
 # everything else relies on the emulate scoping.
-_lk_vars_with_prefix() {
+_ac_vars_with_prefix() {
     if [[ -n "${ZSH_VERSION:-}" ]]; then
         # shellcheck disable=SC2296,SC2086  # zsh-only syntax; this branch never runs under bash, which shellcheck lints as
         print -l -- ${(k)parameters[(I)$1*]} 2>/dev/null
@@ -30,21 +30,21 @@ _lk_vars_with_prefix() {
 # Read the value of the variable named "$1" — a portable stand-in for bash's
 # ${!1} indirect expansion, which zsh's parser rejects outright (no amount of
 # `emulate -L bash` teaches it that syntax; eval is the only common ground).
-_lk_indirect() {
-    local _lk_ind_val
-    eval "_lk_ind_val=\"\${$1:-}\""
-    printf '%s' "$_lk_ind_val"
+_ac_indirect() {
+    local _ac_ind_val
+    eval "_ac_ind_val=\"\${$1:-}\""
+    printf '%s' "$_ac_ind_val"
 }
 
-_lk_indirect_set() {
+_ac_indirect_set() {
     eval "[[ -n \"\${$1+set}\" ]]"
 }
 
 # Print the keys of the associative array named "$1", one per line — a
 # portable stand-in for bash's "${!arrname[@]}", which zsh's parser rejects.
-# Every caller's keys pass through _lk_safe_name first (alphanumeric only),
+# Every caller's keys pass through _ac_safe_name first (alphanumeric only),
 # so unquoted word-splitting on the result is safe.
-_lk_assoc_keys() {
+_ac_assoc_keys() {
     if [[ -n "${ZSH_VERSION:-}" ]]; then
         eval "print -l -- \"\${(k)$1}\"" 2>/dev/null
     else
@@ -54,7 +54,7 @@ _lk_assoc_keys() {
 
 # Lowercase "$1" — a portable stand-in for bash's ${var,,}, which zsh has no
 # equivalent syntax for (it uses ${(L)var} instead).
-_lk_lower() {
+_ac_lower() {
     if [[ -n "${ZSH_VERSION:-}" ]]; then
         # shellcheck disable=SC2296  # zsh-only syntax; this branch never runs under bash, which shellcheck lints as
         printf '%s' "${(L)1}"
@@ -63,7 +63,7 @@ _lk_lower() {
     fi
 }
 
-_lk_assign() {
+_ac_assign() {
     # Safely assign a value to a dynamically-named variable
     eval "$1=\"\$2\""
 }
@@ -78,7 +78,7 @@ _lk_assign() {
 #
 # Pure-alphanumeric names are returned unchanged, which keeps the common case
 # readable and preserves existing variable names.
-_lk_safe_name() {
+_ac_safe_name() {
     local s="${1:-}" out="" i c
     for (( i = 0; i < ${#s}; i++ )); do
         c="${s:$i:1}"
@@ -91,36 +91,36 @@ _lk_safe_name() {
 }
 
 # Registry mapping a safe suffix back to the project name as the user wrote it.
-# Without this, _lk_write_config rewrote every project key in its sanitized
+# Without this, _ac_write_config rewrote every project key in its sanitized
 # form, corrupting names that contained hyphens or dots.
-declare -gA _LK_PROJ_NAME 2>/dev/null || declare -A _LK_PROJ_NAME
+declare -gA _AC_PROJ_NAME 2>/dev/null || declare -A _AC_PROJ_NAME
 
 # Record the original spelling for a project name.
-_lk_register_project() {
+_ac_register_project() {
     local name="${1:-}" safe
     [[ -z "$name" ]] && return 0
-    safe="$(_lk_safe_name "$name")"
-    _LK_PROJ_NAME["$safe"]="$name"
+    safe="$(_ac_safe_name "$name")"
+    _AC_PROJ_NAME["$safe"]="$name"
     return 0
 }
 
 # Record a tracked app name in configuration order.
-_lk_register_app() {
+_ac_register_app() {
     local name="${1:-}"
     [[ -z "$name" ]] && return 0
     local existing
-    for existing in "${_LK_TRACKED_APP_NAMES[@]+"${_LK_TRACKED_APP_NAMES[@]}"}"; do
+    for existing in "${_AC_TRACKED_APP_NAMES[@]+"${_AC_TRACKED_APP_NAMES[@]}"}"; do
         [[ "$existing" == "$name" ]] && return 0
     done
-    _LK_TRACKED_APP_NAMES+=("$name")
+    _AC_TRACKED_APP_NAMES+=("$name")
     return 0
 }
 
-# Inverse of _lk_safe_name for ASCII names. Because the encoding is injective
+# Inverse of _ac_safe_name for ASCII names. Because the encoding is injective
 # it can be decoded directly, so a project name survives a write/read cycle
 # even when no registry entry exists (for example when a caller assigns a
 # per-project variable without going through the config parser).
-_lk_decode_name() {
+_ac_decode_name() {
     local s="${1:-}"
     local out="" i=0 c n
     n=${#s}
@@ -138,19 +138,19 @@ _lk_decode_name() {
 }
 
 # Resolve a safe suffix back to the original project name.
-_lk_project_name() {
+_ac_project_name() {
     local safe="${1:-}"
-    if [[ -n "${_LK_PROJ_NAME[$safe]+set}" ]]; then
-        printf '%s' "${_LK_PROJ_NAME[$safe]}"
+    if [[ -n "${_AC_PROJ_NAME[$safe]+set}" ]]; then
+        printf '%s' "${_AC_PROJ_NAME[$safe]}"
     else
-        _lk_decode_name "$safe"
+        _ac_decode_name "$safe"
     fi
 }
 
 # Reproduce the pre-bfde9cc "collapsing" name sanitizer: every byte that is not
 # alphanumeric became a single underscore. Used only to locate orphaned legacy
 # config keys so their values can be migrated onto the current injective keys.
-_lk_legacy_safe_name() {
+_ac_legacy_safe_name() {
     local s="${1:-}" out="" i c
     for (( i = 0; i < ${#s}; i++ )); do
         c="${s:$i:1}"
@@ -170,14 +170,14 @@ _lk_legacy_safe_name() {
 # are empty but whose legacy-encoding variables hold a value, copy them across.
 # Only fills gaps — a value already present under the current key always wins,
 # so re-running is safe and idempotent.
-_lk_migrate_legacy_project_keys() {
+_ac_migrate_legacy_project_keys() {
     local prop safe legacy cur_var leg_var d name
     local -A seen=()
     local -a names=()
 
     # Candidate names: every real subdirectory of the configured roots ...
     local root
-    for root in "$_LK_PROJECTS_DIR" "${_LK_EXTRA_DIRS[@]+"${_LK_EXTRA_DIRS[@]}"}"; do
+    for root in "$_AC_PROJECTS_DIR" "${_AC_EXTRA_DIRS[@]+"${_AC_EXTRA_DIRS[@]}"}"; do
         [[ -n "$root" && -d "$root" ]] || continue
         for d in "$root"/*/; do
             [[ -d "$d" ]] || continue
@@ -188,46 +188,46 @@ _lk_migrate_legacy_project_keys() {
     done
     # ... plus every name recorded during config parsing (covers projects whose
     # directory is not currently present but whose settings should still map).
-    for safe in $(_lk_assoc_keys _LK_PROJ_NAME); do
-        name="${_LK_PROJ_NAME[$safe]}"
+    for safe in $(_ac_assoc_keys _AC_PROJ_NAME); do
+        name="${_AC_PROJ_NAME[$safe]}"
         [[ -n "${seen[$name]+x}" ]] && continue
         seen[$name]=1; names+=("$name")
     done
 
     for name in "${names[@]+"${names[@]}"}"; do
-        safe="$(_lk_safe_name "$name")"
+        safe="$(_ac_safe_name "$name")"
         # The legacy config key was the collapsed name (non-alphanumerics -> "_").
-        # The parser stores every key through the CURRENT _lk_safe_name, so the
-        # legacy key lives in the variable table under _lk_safe_name(collapsed).
-        legacy="$(_lk_safe_name "$(_lk_legacy_safe_name "$name")")"
+        # The parser stores every key through the CURRENT _ac_safe_name, so the
+        # legacy key lives in the variable table under _ac_safe_name(collapsed).
+        legacy="$(_ac_safe_name "$(_ac_legacy_safe_name "$name")")"
         # If the collapsed form equals the name itself, current == legacy: skip.
         [[ "$legacy" == "$safe" ]] && continue
-        for prop in KIRO_FLAGS_ PROJECT_COLOR_ PROJECT_TITLE_ PROJECT_PROMPT_ PROJECT_ALIAS_; do
-            cur_var="_LK_${prop}${safe}"
-            leg_var="_LK_${prop}${legacy}"
-            if [[ -z "$(_lk_indirect "$cur_var")" && -n "$(_lk_indirect "$leg_var")" ]]; then
-                _lk_assign "$cur_var" "$(_lk_indirect "$leg_var")"
+        for prop in CLI_FLAGS_ PROJECT_COLOR_ PROJECT_TITLE_ PROJECT_PROMPT_ PROJECT_ALIAS_; do
+            cur_var="_AC_${prop}${safe}"
+            leg_var="_AC_${prop}${legacy}"
+            if [[ -z "$(_ac_indirect "$cur_var")" && -n "$(_ac_indirect "$leg_var")" ]]; then
+                _ac_assign "$cur_var" "$(_ac_indirect "$leg_var")"
                 # Ensure the migrated project is registered under its real name so
-                # _lk_write_config emits it with the correct (hyphenated) key.
-                _lk_register_project "$name"
+                # _ac_write_config emits it with the correct (hyphenated) key.
+                _ac_register_project "$name"
             fi
         done
     done
 }
 
-_lk_clear() {
+_ac_clear() {
     printf '\e[2J\e[H'
 }
 
-# Split a flag string into the global array _LK_FLAG_ARGV, honouring single
+# Split a flag string into the global array _AC_FLAG_ARGV, honouring single
 # quotes, double quotes, and backslash escapes.
 #
 # Deliberately implemented without `eval`: flag strings come from the config
 # file, which is data, never code. This lets a flag value legitimately contain
 # spaces (e.g. --agent "my agent") which plain word-splitting cannot express.
-_lk_split_flags() {
+_ac_split_flags() {
     local s="${1:-}"
-    _LK_FLAG_ARGV=()
+    _AC_FLAG_ARGV=()
     local n=${#s} i=0 c cur="" in_tok=0 quote=""
 
     while (( i < n )); do
@@ -249,7 +249,7 @@ _lk_split_flags() {
                     i=$(( i + 1 )); cur+="${s:$i:1}"; in_tok=1 ;;
                 ' '|$'\t')
                     if (( in_tok )); then
-                        _LK_FLAG_ARGV+=("$cur"); cur=""; in_tok=0
+                        _AC_FLAG_ARGV+=("$cur"); cur=""; in_tok=0
                     fi ;;
                 *)
                     cur+="$c"; in_tok=1 ;;
@@ -259,7 +259,7 @@ _lk_split_flags() {
     done
 
     if (( in_tok )); then
-        _LK_FLAG_ARGV+=("$cur")
+        _AC_FLAG_ARGV+=("$cur")
     fi
     return 0
 }
@@ -269,17 +269,17 @@ _lk_split_flags() {
 # The generated script deletes itself when it starts, but that cannot happen if
 # the terminal never launched it, or on Windows where unlinking an open file
 # fails. Sweeping anything older than a day keeps the temp directory clean.
-_lk_sweep_stale_tab_scripts() {
+_ac_sweep_stale_tab_scripts() {
     local tmpdir="${TMPDIR:-/tmp}"
     [[ -d "$tmpdir" ]] || return 0
-    find "$tmpdir" -maxdepth 1 -name 'lk-tab-*.sh' -type f -mtime +0 -delete 2>/dev/null
+    find "$tmpdir" -maxdepth 1 -name 'ac-tab-*.sh' -type f -mtime +0 -delete 2>/dev/null
     return 0
 }
 
 # Run a command with a spinner indicator.
-# Usage: _lk_spin "message" command [args...]
+# Usage: _ac_spin "message" command [args...]
 # Output from the command is suppressed; on failure the exit code is returned.
-_lk_spin() {
+_ac_spin() {
     local msg="$1"; shift
     local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
     local c_dim=$'\e[2m'
@@ -315,9 +315,9 @@ _lk_spin() {
 }
 
 # Run a command with a spinner, capturing output on failure.
-# Usage: _lk_spin_verbose "message" command [args...]
+# Usage: _ac_spin_verbose "message" command [args...]
 # On success: shows ✓. On failure: shows ✗ and prints captured output.
-_lk_spin_verbose() {
+_ac_spin_verbose() {
     local msg="$1"; shift
     local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
     local c_dim=$'\e[2m'
@@ -359,10 +359,10 @@ _lk_spin_verbose() {
     return $rc
 }
 
-_LK_CONFIG_FILE="${HOME}/.config/kiro-launcher/config.yaml"
+_AC_CONFIG_FILE="${HOME}/.config/anycli/config.yaml"
 
 # Seconds the menu waits for input before giving up.
-_LK_MENU_TIMEOUT="${_LK_MENU_TIMEOUT:-300}"
+_AC_MENU_TIMEOUT="${_AC_MENU_TIMEOUT:-300}"
 
 # --- YAML Config Parser ---
 
@@ -372,17 +372,17 @@ _LK_MENU_TIMEOUT="${_LK_MENU_TIMEOUT:-300}"
 # "# sharp" became "title: # sharp" (a comment, i.e. null to any real parser)
 # and a value containing ": " was ambiguous. Always emit a double-quoted
 # scalar with backslash and quote escaped.
-_lk_yaml_quote() {
+_ac_yaml_quote() {
     local v="${1:-}"
     v="${v//\\/\\\\}"
     v="${v//\"/\\\"}"
     printf '"%s"' "$v"
 }
 
-# Inverse of _lk_yaml_quote. Strips one layer of surrounding quotes and
+# Inverse of _ac_yaml_quote. Strips one layer of surrounding quotes and
 # unescapes. Bare (unquoted) values are returned as-is so hand-written config
 # files keep working.
-_lk_yaml_unquote() {
+_ac_yaml_unquote() {
     local v="${1:-}"
     # Trailing whitespace is not significant in unquoted YAML scalars
     if [[ "$v" == '"'*'"' && ${#v} -ge 2 ]]; then
@@ -396,74 +396,77 @@ _lk_yaml_unquote() {
     printf '%s' "$v"
 }
 
-_lk_load_config() {
+_ac_load_config() {
     # Defaults
-    _LK_PROJECTS_DIR="${HOME}/projects"
-    _LK_KIRO_FLAGS=""
-    _LK_CLI_TOOL="kiro-cli"
-    _LK_CLI_LAUNCH="chat"
-    _LK_AUTO_UPDATE_CHECK="true"
-    _LK_THEME="Default"
-    _LK_SORT_ORDER="name"
-    _LK_SCAN_DEPTH="1"
-    _LK_SHOW_GIT_STATUS="false"
-    _LK_SHOW_SESSIONS="false"
-    _LK_EXTRA_DIRS=()
+    _AC_PROJECTS_DIR="${HOME}/projects"
+    _AC_CLI_FLAGS=""
+    # No privileged default CLI -- anycli launches whatever tool is
+    # configured (via the first-run wizard or config.yaml's cli_tool), not
+    # one AI CLI singled out over the others in _AC_KNOWN_CLIS.
+    _AC_CLI_TOOL=""
+    _AC_CLI_LAUNCH=""
+    _AC_AUTO_UPDATE_CHECK="true"
+    _AC_THEME="Default"
+    _AC_SORT_ORDER="name"
+    _AC_SCAN_DEPTH="1"
+    _AC_SHOW_GIT_STATUS="false"
+    _AC_SHOW_SESSIONS="false"
+    _AC_EXTRA_DIRS=()
     # Clear per-project flags/color/title
     local varname
-    for varname in $(_lk_vars_with_prefix _LK_KIRO_FLAGS_); do
+    for varname in $(_ac_vars_with_prefix _AC_CLI_FLAGS_); do
         unset "$varname"
     done
-    for varname in $(_lk_vars_with_prefix _LK_PROJECT_COLOR_); do
+    for varname in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_); do
         unset "$varname"
     done
-    for varname in $(_lk_vars_with_prefix _LK_PROJECT_TITLE_); do
+    for varname in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_); do
         unset "$varname"
     done
-    for varname in $(_lk_vars_with_prefix _LK_PROJECT_PROMPT_); do
+    for varname in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do
         unset "$varname"
     done
-    for varname in $(_lk_vars_with_prefix _LK_PROJECT_ALIAS_); do
+    for varname in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do
         unset "$varname"
     done
-    _LK_PROJ_NAME=()
-    for varname in $(_lk_vars_with_prefix _LK_APP_); do
+    _AC_PROJ_NAME=()
+    for varname in $(_ac_vars_with_prefix _AC_APP_); do
         unset "$varname"
     done
-    _LK_TRACKED_APP_NAMES=()
+    _AC_TRACKED_APP_NAMES=()
 
     # Auto-migrate legacy flat config to YAML
-    local _LK_LEGACY_CONFIG="${HOME}/.config/kiro-launcher/config"
-    if [[ ! -f "$_LK_CONFIG_FILE" && -f "$_LK_LEGACY_CONFIG" ]]; then
-        _lk_migrate_legacy "$_LK_LEGACY_CONFIG"
+    local _AC_LEGACY_CONFIG="${HOME}/.config/anycli/config"
+    if [[ ! -f "$_AC_CONFIG_FILE" && -f "$_AC_LEGACY_CONFIG" ]]; then
+        _ac_migrate_legacy "$_AC_LEGACY_CONFIG"
     fi
 
     # Parse YAML config if it exists
-    if [[ -f "$_LK_CONFIG_FILE" ]]; then
-        _lk_parse_yaml "$_LK_CONFIG_FILE"
-        # Repair configs written before _lk_safe_name became injective (commit
+    if [[ -f "$_AC_CONFIG_FILE" ]]; then
+        _ac_parse_yaml "$_AC_CONFIG_FILE"
+        # Repair configs written before _ac_safe_name became injective (commit
         # bfde9cc). Old keys collapsed every non-alphanumeric byte to "_", so a
         # project like "public-knowledge-network" was stored under the key
         # "public_knowledge_network". The new injective encoding is
         # "public_2dknowledge_2dnetwork", so those old keys no longer resolve and
         # per-project color/title/prompt/alias/flags appeared to vanish. This
         # remaps any orphaned legacy keys onto the current encoding in-memory.
-        _lk_migrate_legacy_project_keys
+        _ac_migrate_legacy_project_keys
     fi
 
     # Env var overrides config file
-    [[ -n "${LK_PROJECTS_DIR:-}" ]] && _LK_PROJECTS_DIR="$LK_PROJECTS_DIR"
+    [[ -n "${AC_PROJECTS_DIR:-}" ]] && _AC_PROJECTS_DIR="$AC_PROJECTS_DIR"
 
     # Explicit success: the guard above evaluates false whenever
-    # LK_PROJECTS_DIR is unset, which used to make this function return 1 in
-    # the common case and silently break "_lk_load_config && ..." callers.
+    # AC_PROJECTS_DIR is unset, which used to make this function return 1 in
+    # the common case and silently break "_ac_load_config && ..." callers.
     return 0
 }
 
-_lk_migrate_legacy() {
+_ac_migrate_legacy() {
     local legacy_file="$1"
     local dir
-    dir="$(dirname "$_LK_CONFIG_FILE")"
+    dir="$(dirname "$_AC_CONFIG_FILE")"
     mkdir -p "$dir"
 
     # Parse legacy flat config
@@ -475,26 +478,26 @@ _lk_migrate_legacy() {
         value="${value%"${value##*[![:space:]]}"}"
 
         case "$key" in
-            PROJECTS_DIR)    _LK_PROJECTS_DIR="$value" ;;
-            KIRO_FLAGS)      _LK_KIRO_FLAGS="$value" ;;
-            KIRO_FLAGS_*)
-                local proj="${key#KIRO_FLAGS_}"
+            PROJECTS_DIR)    _AC_PROJECTS_DIR="$value" ;;
+            CLI_FLAGS)      _AC_CLI_FLAGS="$value" ;;
+            CLI_FLAGS_*)
+                local proj="${key#CLI_FLAGS_}"
                 local safe
-                safe="$(_lk_safe_name "$proj")"
-                _lk_register_project "$proj"
-                _lk_assign "_LK_KIRO_FLAGS_${safe}" "$value"
+                safe="$(_ac_safe_name "$proj")"
+                _ac_register_project "$proj"
+                _ac_assign "_AC_CLI_FLAGS_${safe}" "$value"
                 ;;
         esac
     done < "$legacy_file"
 
     # Write new YAML config
-    _lk_write_config
+    _ac_write_config
 
     # Rename old file so migration doesn't repeat
     mv "$legacy_file" "${legacy_file}.bak" 2>/dev/null
 }
 
-_lk_parse_yaml() {
+_ac_parse_yaml() {
     local file="$1"
     local section="" project=""
 
@@ -508,21 +511,21 @@ _lk_parse_yaml() {
             local key="${BASH_REMATCH[1]}"
             local value="${BASH_REMATCH[2]}"
             value="${value%"${value##*[![:space:]]}"}"
-            value="$(_lk_yaml_unquote "$value")"
+            value="$(_ac_yaml_unquote "$value")"
             case "$value" in
                 "~"*) value="${HOME}${value#"~"}" ;;
             esac
             case "$key" in
-                projects_dir)  _LK_PROJECTS_DIR="$value" ;;
-                default_flags) _LK_KIRO_FLAGS="$value" ;;
-                cli_tool)      _LK_CLI_TOOL="$value" ;;
-                cli_launch)    _LK_CLI_LAUNCH="$value" ;;
-                auto_update_check) _LK_AUTO_UPDATE_CHECK="$value" ;;
-                theme)         _LK_THEME="$value" ;;
-                sort_order)    _LK_SORT_ORDER="$value" ;;
-                scan_depth)    _LK_SCAN_DEPTH="$value" ;;
-                show_git_status) _LK_SHOW_GIT_STATUS="$value" ;;
-                show_sessions) _LK_SHOW_SESSIONS="$value" ;;
+                projects_dir)  _AC_PROJECTS_DIR="$value" ;;
+                default_flags) _AC_CLI_FLAGS="$value" ;;
+                cli_tool)      _AC_CLI_TOOL="$value" ;;
+                cli_launch)    _AC_CLI_LAUNCH="$value" ;;
+                auto_update_check) _AC_AUTO_UPDATE_CHECK="$value" ;;
+                theme)         _AC_THEME="$value" ;;
+                sort_order)    _AC_SORT_ORDER="$value" ;;
+                scan_depth)    _AC_SCAN_DEPTH="$value" ;;
+                show_git_status) _AC_SHOW_GIT_STATUS="$value" ;;
+                show_sessions) _AC_SHOW_SESSIONS="$value" ;;
             esac
             section=""
             project=""
@@ -533,31 +536,31 @@ _lk_parse_yaml() {
         # 2-space indent name (project), double-quoted: '  "name":'
         elif [[ "$line" =~ ^[[:space:]]{2}(\"([^\"]|\\.)*\"):[[:space:]]*$ ]]; then
             if [[ "$section" == "projects" ]]; then
-                project="$(_lk_yaml_unquote "${BASH_REMATCH[1]}")"
-                _lk_register_project "$project"
+                project="$(_ac_yaml_unquote "${BASH_REMATCH[1]}")"
+                _ac_register_project "$project"
             elif [[ "$section" == "tracked_apps" ]]; then
-                project="$(_lk_yaml_unquote "${BASH_REMATCH[1]}")"
-                _lk_register_app "$project"
+                project="$(_ac_yaml_unquote "${BASH_REMATCH[1]}")"
+                _ac_register_app "$project"
             fi
         # 2-space indent name (project), bare: "  name:"
         elif [[ "$line" =~ ^[[:space:]]{2}([^[:space:]][^:]*):[[:space:]]*$ ]]; then
             if [[ "$section" == "projects" ]]; then
-                project="$(_lk_yaml_unquote "${BASH_REMATCH[1]}")"
-                _lk_register_project "$project"
+                project="$(_ac_yaml_unquote "${BASH_REMATCH[1]}")"
+                _ac_register_project "$project"
             elif [[ "$section" == "tracked_apps" ]]; then
-                project="$(_lk_yaml_unquote "${BASH_REMATCH[1]}")"
-                _lk_register_app "$project"
+                project="$(_ac_yaml_unquote "${BASH_REMATCH[1]}")"
+                _ac_register_app "$project"
             fi
         # List item under a top-level sequence key: "  - value"
         elif [[ "$line" =~ ^[[:space:]]{2}-[[:space:]]+(.*) ]]; then
             if [[ "$section" == "extra_dirs" ]]; then
                 local item="${BASH_REMATCH[1]}"
                 item="${item%"${item##*[![:space:]]}"}"
-                item="$(_lk_yaml_unquote "$item")"
+                item="$(_ac_yaml_unquote "$item")"
                 case "$item" in
                     "~"*) item="${HOME}${item#"~"}" ;;
                 esac
-                [[ -n "$item" ]] && _LK_EXTRA_DIRS+=("$item")
+                [[ -n "$item" ]] && _AC_EXTRA_DIRS+=("$item")
             fi
         # 4-space indent: project properties
         elif [[ "$line" =~ ^[[:space:]]{4}([a-z_]+):[[:space:]]+(.*) ]]; then
@@ -565,31 +568,31 @@ _lk_parse_yaml() {
                 local akey="${BASH_REMATCH[1]}"
                 local aval="${BASH_REMATCH[2]}"
                 aval="${aval%"${aval##*[![:space:]]}"}"
-                aval="$(_lk_yaml_unquote "$aval")"
+                aval="$(_ac_yaml_unquote "$aval")"
                 case "$aval" in
                     "~"*) aval="${HOME}${aval#"~"}" ;;
                 esac
                 local asafe
-                asafe="$(_lk_safe_name "$project")"
+                asafe="$(_ac_safe_name "$project")"
                 case "$akey" in
-                    path)            _lk_assign "_LK_APP_PATH_${asafe}" "$aval" ;;
-                    version_file)    _lk_assign "_LK_APP_VERFILE_${asafe}" "$aval" ;;
-                    version_key)     _lk_assign "_LK_APP_VERKEY_${asafe}" "$aval" ;;
-                    version_pattern) _lk_assign "_LK_APP_VERPAT_${asafe}" "$aval" ;;
+                    path)            _ac_assign "_AC_APP_PATH_${asafe}" "$aval" ;;
+                    version_file)    _ac_assign "_AC_APP_VERFILE_${asafe}" "$aval" ;;
+                    version_key)     _ac_assign "_AC_APP_VERKEY_${asafe}" "$aval" ;;
+                    version_pattern) _ac_assign "_AC_APP_VERPAT_${asafe}" "$aval" ;;
                 esac
             elif [[ "$section" == "projects" && -n "$project" ]]; then
                 local pkey="${BASH_REMATCH[1]}"
                 local val="${BASH_REMATCH[2]}"
                 val="${val%"${val##*[![:space:]]}"}"
-                val="$(_lk_yaml_unquote "$val")"
+                val="$(_ac_yaml_unquote "$val")"
                 local safe
-                safe="$(_lk_safe_name "$project")"
+                safe="$(_ac_safe_name "$project")"
                 case "$pkey" in
-                    flags) _lk_assign "_LK_KIRO_FLAGS_${safe}" "$val" ;;
-                    color) _lk_assign "_LK_PROJECT_COLOR_${safe}" "$val" ;;
-                    title) _lk_assign "_LK_PROJECT_TITLE_${safe}" "$val" ;;
-                    prompt) _lk_assign "_LK_PROJECT_PROMPT_${safe}" "$val" ;;
-                    alias) _lk_assign "_LK_PROJECT_ALIAS_${safe}" "$val" ;;
+                    flags) _ac_assign "_AC_CLI_FLAGS_${safe}" "$val" ;;
+                    color) _ac_assign "_AC_PROJECT_COLOR_${safe}" "$val" ;;
+                    title) _ac_assign "_AC_PROJECT_TITLE_${safe}" "$val" ;;
+                    prompt) _ac_assign "_AC_PROJECT_PROMPT_${safe}" "$val" ;;
+                    alias) _ac_assign "_AC_PROJECT_ALIAS_${safe}" "$val" ;;
                 esac
             fi
         fi
@@ -599,12 +602,16 @@ _lk_parse_yaml() {
 # Build the argv for the configured CLI and run it in the current tab.
 # Flags and the launch subcommand are split quote-aware, so a flag value may
 # legitimately contain spaces.
-_lk_run_cli() {
+_ac_run_cli() {
     local flags="${1:-}" prompt="${2:-}" resume="${3:-}"
+    if [[ -z "$_AC_CLI_TOOL" ]]; then
+        printf '  No CLI tool configured yet. Run "ac" then "c" to set one.\n' >&2
+        return 1
+    fi
     local -a argv=()
-    if [[ -n "$_LK_CLI_LAUNCH" ]]; then
-        _lk_split_flags "$_LK_CLI_LAUNCH"
-        argv+=("${_LK_FLAG_ARGV[@]+"${_LK_FLAG_ARGV[@]}"}")
+    if [[ -n "$_AC_CLI_LAUNCH" ]]; then
+        _ac_split_flags "$_AC_CLI_LAUNCH"
+        argv+=("${_AC_FLAG_ARGV[@]+"${_AC_FLAG_ARGV[@]}"}")
     fi
     # Resume/picker: insert the appropriate flag right after the launch
     # subcommand and suppress the per-project prompt (an ongoing or selected
@@ -613,85 +620,85 @@ _lk_run_cli() {
     if [[ -n "$resume" ]]; then
         local rflag
         if [[ "$resume" == "picker" ]]; then
-            rflag="$(_lk_cli_picker_flag "$_LK_CLI_TOOL")"
+            rflag="$(_ac_cli_picker_flag "$_AC_CLI_TOOL")"
         else
-            rflag="$(_lk_cli_resume_flag "$_LK_CLI_TOOL")"
+            rflag="$(_ac_cli_resume_flag "$_AC_CLI_TOOL")"
         fi
         if [[ -n "$rflag" ]]; then
             argv+=("$rflag")
             prompt=""
         else
             printf '  %s has no session %s support — starting a fresh session.\n' \
-                "$_LK_CLI_TOOL" "$([[ "$resume" == "picker" ]] && echo picker || echo resume)"
+                "$_AC_CLI_TOOL" "$([[ "$resume" == "picker" ]] && echo picker || echo resume)"
         fi
     fi
-    _lk_split_flags "$flags"
-    argv+=("${_LK_FLAG_ARGV[@]+"${_LK_FLAG_ARGV[@]}"}")
+    _ac_split_flags "$flags"
+    argv+=("${_AC_FLAG_ARGV[@]+"${_AC_FLAG_ARGV[@]}"}")
     [[ -n "$prompt" ]] && argv+=("$prompt")
-    "$_LK_CLI_TOOL" "${argv[@]+"${argv[@]}"}"
+    "$_AC_CLI_TOOL" "${argv[@]+"${argv[@]}"}"
 }
 
-_lk_get_flags() {
+_ac_get_flags() {
     local dirname="$1"
     local safe_dirname
-    safe_dirname="$(_lk_safe_name "$dirname")"
-    local varname="_LK_KIRO_FLAGS_${safe_dirname}"
-    local val="$(_lk_indirect "$varname")"
+    safe_dirname="$(_ac_safe_name "$dirname")"
+    local varname="_AC_CLI_FLAGS_${safe_dirname}"
+    local val="$(_ac_indirect "$varname")"
 
     # Check if project has flags configured
-    if _lk_indirect_set "$varname"; then
+    if _ac_indirect_set "$varname"; then
         # "none" means suppress inheritance — start empty
         if [[ "$val" == "none" ]]; then
             echo ""
-        elif [[ -n "$val" && -n "$_LK_KIRO_FLAGS" ]]; then
+        elif [[ -n "$val" && -n "$_AC_CLI_FLAGS" ]]; then
             # Inherit default + extend with project flags
-            echo "$_LK_KIRO_FLAGS $val"
+            echo "$_AC_CLI_FLAGS $val"
         elif [[ -n "$val" ]]; then
             echo "$val"
         else
             # Empty string set explicitly = inherit only defaults
-            echo "$_LK_KIRO_FLAGS"
+            echo "$_AC_CLI_FLAGS"
         fi
     else
         # No project config — use defaults only
-        echo "$_LK_KIRO_FLAGS"
+        echo "$_AC_CLI_FLAGS"
     fi
 }
 
-_lk_launch_project() {
+_ac_launch_project() {
     local dir="$1"
     local resume="${2:-}"
     local dirname
     dirname="$(basename "$dir")"
     # Track usage so the menu can offer recency ordering
-    _lk_record_launch "$dirname"
+    _ac_record_launch "$dirname"
     local safe
-    safe="$(_lk_safe_name "$dirname")"
-    local title="$(_lk_indirect "_LK_PROJECT_TITLE_${safe}")"
-    local color="$(_lk_indirect "_LK_PROJECT_COLOR_${safe}")"
-    local prompt="$(_lk_indirect "_LK_PROJECT_PROMPT_${safe}")"
+    safe="$(_ac_safe_name "$dirname")"
+    local title="$(_ac_indirect "_AC_PROJECT_TITLE_${safe}")"
+    local color="$(_ac_indirect "_AC_PROJECT_COLOR_${safe}")"
+    local prompt="$(_ac_indirect "_AC_PROJECT_PROMPT_${safe}")"
     local flags
-    flags=$(_lk_get_flags "$dirname")
+    flags=$(_ac_get_flags "$dirname")
 
     # If no color/title configured, just run in current tab
     if [[ -z "$color" && -z "$title" ]]; then
         cd "$dir" || return 1
-        _lk_run_cli "$flags" "$prompt" "$resume"
+        _ac_run_cli "$flags" "$prompt" "$resume"
         return
     fi
 
     # Open in a new tab via wt.exe (cached lookup)
-    if [[ -z "${_LK_WT_BIN+x}" ]]; then
-        _LK_WT_BIN="$(command -v wt.exe 2>/dev/null)" || \
-        _LK_WT_BIN="$(find /mnt/c/Users/*/AppData/Local/Microsoft/WindowsApps -name "wt.exe" 2>/dev/null | head -1)" || \
-        _LK_WT_BIN="$(find /c/Users/*/AppData/Local/Microsoft/WindowsApps -name "wt.exe" 2>/dev/null | head -1)" || \
-        _LK_WT_BIN=""
+    if [[ -z "${_AC_WT_BIN+x}" ]]; then
+        _AC_WT_BIN="$(command -v wt.exe 2>/dev/null)" || \
+        _AC_WT_BIN="$(find /mnt/c/Users/*/AppData/Local/Microsoft/WindowsApps -name "wt.exe" 2>/dev/null | head -1)" || \
+        _AC_WT_BIN="$(find /c/Users/*/AppData/Local/Microsoft/WindowsApps -name "wt.exe" 2>/dev/null | head -1)" || \
+        _AC_WT_BIN=""
     fi
 
-    if [[ -z "$_LK_WT_BIN" ]]; then
+    if [[ -z "$_AC_WT_BIN" ]]; then
         # Fallback: no wt.exe, run in current tab
         cd "$dir" || return 1
-        _lk_run_cli "$flags" "$prompt" "$resume"
+        _ac_run_cli "$flags" "$prompt" "$resume"
         return
     fi
 
@@ -704,20 +711,20 @@ _lk_launch_project() {
     # fails with "exec: alias ...: not found" (exit 127). `type -P` only ever
     # yields an executable path, ignoring aliases and functions.
     local cli_bin
-    cli_bin="$(type -P "$_LK_CLI_TOOL" 2>/dev/null)"
+    cli_bin="$(type -P "$_AC_CLI_TOOL" 2>/dev/null)"
     if [[ -z "$cli_bin" ]]; then
         # No executable on PATH (name may only be a shell alias/function, which a
         # non-interactive tab cannot use). Fall back to running in the current tab.
-        printf '  %s not found on PATH — running in current tab.\n' "$_LK_CLI_TOOL"
+        printf '  %s not found on PATH — running in current tab.\n' "$_AC_CLI_TOOL"
         cd "$dir" || return 1
-        _lk_run_cli "$flags" "$prompt" "$resume"
+        _ac_run_cli "$flags" "$prompt" "$resume"
         return
     fi
 
-    _lk_sweep_stale_tab_scripts
+    _ac_sweep_stale_tab_scripts
 
     local script_file
-    script_file="$(mktemp "${TMPDIR:-/tmp}/lk-tab-XXXXXXXX.sh" 2>/dev/null)" || return 1
+    script_file="$(mktemp "${TMPDIR:-/tmp}/ac-tab-XXXXXXXX.sh" 2>/dev/null)" || return 1
     chmod 700 "$script_file" 2>/dev/null
 
     # Every interpolated value is shell-quoted with printf %q so that directory
@@ -733,31 +740,31 @@ _lk_launch_project() {
     # regardless of expand_aliases. Exec the real binary path directly; this both
     # fixes the exit-127 crash and is the only thing that actually works here.
     local -a launch_argv=("$cli_bin")
-    [[ -n "$_LK_CLI_LAUNCH" ]] && launch_argv+=("$_LK_CLI_LAUNCH")
+    [[ -n "$_AC_CLI_LAUNCH" ]] && launch_argv+=("$_AC_CLI_LAUNCH")
     # Resume/picker: insert the appropriate flag after the subcommand and drop
-    # the prompt, matching the current-tab behavior in _lk_run_cli. "$resume" is
+    # the prompt, matching the current-tab behavior in _ac_run_cli. "$resume" is
     # a mode: "picker" selects interactively, any other non-empty value resumes
     # the most recent. Unsupported CLIs emit no flag and start fresh.
     if [[ -n "$resume" ]]; then
         local rflag
         if [[ "$resume" == "picker" ]]; then
-            rflag="$(_lk_cli_picker_flag "$_LK_CLI_TOOL")"
+            rflag="$(_ac_cli_picker_flag "$_AC_CLI_TOOL")"
         else
-            rflag="$(_lk_cli_resume_flag "$_LK_CLI_TOOL")"
+            rflag="$(_ac_cli_resume_flag "$_AC_CLI_TOOL")"
         fi
         if [[ -n "$rflag" ]]; then
             launch_argv+=("$rflag")
             prompt=""
         fi
     fi
-    _lk_split_flags "$flags"
-    launch_argv+=("${_LK_FLAG_ARGV[@]}")
+    _ac_split_flags "$flags"
+    launch_argv+=("${_AC_FLAG_ARGV[@]}")
     [[ -n "$prompt" ]] && launch_argv+=("$prompt")
 
     {
         printf '#!/usr/bin/env bash\n'
         printf 'rm -f -- %q\n' "$script_file"
-        printf 'export _LK_SPAWNED_TAB=1\n'
+        printf 'export _AC_SPAWNED_TAB=1\n'
         if [[ -n "$title" ]]; then
             printf 'printf %q\n' "$(printf '\e]0;%s\a' "$title")"
         fi
@@ -777,7 +784,7 @@ _lk_launch_project() {
         # literal shell code into the generated tab script. Variables like
         # $_saved and $_junk must NOT expand at generation time — they belong
         # to the spawned script's runtime. (SC2016 suppressed in .shellcheckrc.)
-        printf '%s\n' '_lk_drain_tty() {'
+        printf '%s\n' '_ac_drain_tty() {'
         printf '%s\n' '    [[ -t 0 ]] || return 0'
         printf '%s\n' '    local _saved'
         printf '%s\n' '    _saved="$(stty -g 2>/dev/null)" || return 0'
@@ -794,7 +801,7 @@ _lk_launch_project() {
         printf '%s\n' '    trap - INT TERM'
         printf '%s\n' '    stty "$_saved" 2>/dev/null'
         printf '%s\n' '}'
-        printf '%s\n' '_lk_drain_tty'
+        printf '%s\n' '_ac_drain_tty'
         printf 'exec'
         printf ' %q' "${launch_argv[@]}"
         printf '\n'
@@ -808,7 +815,7 @@ _lk_launch_project() {
     [[ -n "$color" ]] && wt_args+=("--tabColor" "$color")
 
     # Detect platform: WSL, Git Bash (MINGW/MSYS), or native Unix
-    local is_wsl="${_LK_IS_WSL:-}"
+    local is_wsl="${_AC_IS_WSL:-}"
     if [[ -z "$is_wsl" ]]; then
         [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null && is_wsl=1 || is_wsl=0
     fi
@@ -824,7 +831,7 @@ _lk_launch_project() {
         wt_args+=("wsl.exe" "-d" "$distro" "--cd" "$dir" "--" "bash" "-l" "$script_file")
     elif [[ "${MSYSTEM:-}" =~ ^(MINGW|MSYS|UCRT) || "$(uname -s 2>/dev/null)" == MINGW* ]]; then
         # Git Bash on native Windows — convert paths for wt.exe (Windows process)
-        # Use env to set _LK_SPAWNED_TAB BEFORE bash sources .bashrc
+        # Use env to set _AC_SPAWNED_TAB BEFORE bash sources .bashrc
         # Use -- to separate wt.exe options from the command
         local win_script win_bash win_env win_dir
         win_script="$(cygpath -w "$script_file" 2>/dev/null || echo "$script_file")"
@@ -835,114 +842,114 @@ _lk_launch_project() {
         # launch with "Could not access starting directory" (error 0x8007010b).
         win_dir="$(cygpath -w "$dir" 2>/dev/null || true)"
         [[ -n "$win_dir" ]] && wt_args+=("--startingDirectory" "$win_dir")
-        wt_args+=("--" "$win_env" "_LK_SPAWNED_TAB=1" "$win_bash" "-l" "$win_script")
+        wt_args+=("--" "$win_env" "_AC_SPAWNED_TAB=1" "$win_bash" "-l" "$win_script")
     else
         wt_args+=("bash" "-l" "$script_file")
     fi
 
-    "$_LK_WT_BIN" "${wt_args[@]}" 2>/dev/null &
+    "$_AC_WT_BIN" "${wt_args[@]}" 2>/dev/null &
     disown
-    _LK_LAUNCHED_NEW_TAB=1
+    _AC_LAUNCHED_NEW_TAB=1
 }
 
 # --- YAML Config Writer ---
-_lk_write_config() {
+_ac_write_config() {
     local dir
-    dir="$(dirname "$_LK_CONFIG_FILE")"
+    dir="$(dirname "$_AC_CONFIG_FILE")"
     mkdir -p "$dir"
 
     {
-        echo "projects_dir: $(_lk_yaml_quote "${_LK_PROJECTS_DIR/#$HOME/\~}")"
-        echo "default_flags: $(_lk_yaml_quote "$_LK_KIRO_FLAGS")"
-        echo "cli_tool: $(_lk_yaml_quote "$_LK_CLI_TOOL")"
-        echo "cli_launch: $(_lk_yaml_quote "$_LK_CLI_LAUNCH")"
-        echo "auto_update_check: $(_lk_yaml_quote "$_LK_AUTO_UPDATE_CHECK")"
-        echo "theme: $(_lk_yaml_quote "$_LK_THEME")"
-        echo "sort_order: $(_lk_yaml_quote "$_LK_SORT_ORDER")"
-        echo "scan_depth: $(_lk_yaml_quote "$_LK_SCAN_DEPTH")"
-        echo "show_git_status: $(_lk_yaml_quote "$_LK_SHOW_GIT_STATUS")"
-        echo "show_sessions: $(_lk_yaml_quote "$_LK_SHOW_SESSIONS")"
-        if (( ${#_LK_EXTRA_DIRS[@]} > 0 )); then
+        echo "projects_dir: $(_ac_yaml_quote "${_AC_PROJECTS_DIR/#$HOME/\~}")"
+        echo "default_flags: $(_ac_yaml_quote "$_AC_CLI_FLAGS")"
+        echo "cli_tool: $(_ac_yaml_quote "$_AC_CLI_TOOL")"
+        echo "cli_launch: $(_ac_yaml_quote "$_AC_CLI_LAUNCH")"
+        echo "auto_update_check: $(_ac_yaml_quote "$_AC_AUTO_UPDATE_CHECK")"
+        echo "theme: $(_ac_yaml_quote "$_AC_THEME")"
+        echo "sort_order: $(_ac_yaml_quote "$_AC_SORT_ORDER")"
+        echo "scan_depth: $(_ac_yaml_quote "$_AC_SCAN_DEPTH")"
+        echo "show_git_status: $(_ac_yaml_quote "$_AC_SHOW_GIT_STATUS")"
+        echo "show_sessions: $(_ac_yaml_quote "$_AC_SHOW_SESSIONS")"
+        if (( ${#_AC_EXTRA_DIRS[@]} > 0 )); then
             echo "extra_dirs:"
             local xd
-            for xd in "${_LK_EXTRA_DIRS[@]}"; do
-                echo "  - $(_lk_yaml_quote "${xd/#$HOME/\~}")"
+            for xd in "${_AC_EXTRA_DIRS[@]}"; do
+                echo "  - $(_ac_yaml_quote "${xd/#$HOME/\~}")"
             done
         fi
         echo ""
         echo "projects:"
         # Collect all projects that have any config (using assoc array as set)
-        local -A _lk_seen=()
-        local -a _lk_all_projects=()
+        local -A _ac_seen=()
+        local -a _ac_all_projects=()
         local varname p
-        for varname in $(_lk_vars_with_prefix _LK_KIRO_FLAGS_); do
-            p="${varname#_LK_KIRO_FLAGS_}"
-            [[ -z "${_lk_seen[$p]+x}" ]] && _lk_all_projects+=("$p")
-            _lk_seen[$p]=1
+        for varname in $(_ac_vars_with_prefix _AC_CLI_FLAGS_); do
+            p="${varname#_AC_CLI_FLAGS_}"
+            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
+            _ac_seen[$p]=1
         done
-        for varname in $(_lk_vars_with_prefix _LK_PROJECT_COLOR_); do
-            p="${varname#_LK_PROJECT_COLOR_}"
-            [[ -z "${_lk_seen[$p]+x}" ]] && _lk_all_projects+=("$p")
-            _lk_seen[$p]=1
+        for varname in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_); do
+            p="${varname#_AC_PROJECT_COLOR_}"
+            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
+            _ac_seen[$p]=1
         done
-        for varname in $(_lk_vars_with_prefix _LK_PROJECT_TITLE_); do
-            p="${varname#_LK_PROJECT_TITLE_}"
-            [[ -z "${_lk_seen[$p]+x}" ]] && _lk_all_projects+=("$p")
-            _lk_seen[$p]=1
+        for varname in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_); do
+            p="${varname#_AC_PROJECT_TITLE_}"
+            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
+            _ac_seen[$p]=1
         done
-        for varname in $(_lk_vars_with_prefix _LK_PROJECT_PROMPT_); do
-            p="${varname#_LK_PROJECT_PROMPT_}"
-            [[ -z "${_lk_seen[$p]+x}" ]] && _lk_all_projects+=("$p")
-            _lk_seen[$p]=1
+        for varname in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do
+            p="${varname#_AC_PROJECT_PROMPT_}"
+            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
+            _ac_seen[$p]=1
         done
-        for varname in $(_lk_vars_with_prefix _LK_PROJECT_ALIAS_); do
-            p="${varname#_LK_PROJECT_ALIAS_}"
-            [[ -z "${_lk_seen[$p]+x}" ]] && _lk_all_projects+=("$p")
-            _lk_seen[$p]=1
+        for varname in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do
+            p="${varname#_AC_PROJECT_ALIAS_}"
+            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
+            _ac_seen[$p]=1
         done
-        for proj in "${_lk_all_projects[@]:-}"; do
+        for proj in "${_ac_all_projects[@]:-}"; do
             [[ -z "$proj" ]] && continue
             # Emit the project name as the user wrote it. Previously the
             # sanitized variable suffix was written back, which silently
             # renamed "my-app" to "my_app" and dropped colliding entries.
             local orig
-            orig="$(_lk_project_name "$proj")"
-            echo "  $(_lk_yaml_quote "$orig"):"
-            local flags="$(_lk_indirect "_LK_KIRO_FLAGS_${proj}")"
-            local color="$(_lk_indirect "_LK_PROJECT_COLOR_${proj}")"
-            local title="$(_lk_indirect "_LK_PROJECT_TITLE_${proj}")"
-            local prompt="$(_lk_indirect "_LK_PROJECT_PROMPT_${proj}")"
-            local alias="$(_lk_indirect "_LK_PROJECT_ALIAS_${proj}")"
-            [[ -n "$flags" ]]  && echo "    flags: $(_lk_yaml_quote "$flags")"
-            [[ -n "$color" ]]  && echo "    color: $(_lk_yaml_quote "$color")"
-            [[ -n "$title" ]]  && echo "    title: $(_lk_yaml_quote "$title")"
-            [[ -n "$prompt" ]] && echo "    prompt: $(_lk_yaml_quote "$prompt")"
-            [[ -n "$alias" ]]  && echo "    alias: $(_lk_yaml_quote "$alias")"
+            orig="$(_ac_project_name "$proj")"
+            echo "  $(_ac_yaml_quote "$orig"):"
+            local flags="$(_ac_indirect "_AC_CLI_FLAGS_${proj}")"
+            local color="$(_ac_indirect "_AC_PROJECT_COLOR_${proj}")"
+            local title="$(_ac_indirect "_AC_PROJECT_TITLE_${proj}")"
+            local prompt="$(_ac_indirect "_AC_PROJECT_PROMPT_${proj}")"
+            local alias="$(_ac_indirect "_AC_PROJECT_ALIAS_${proj}")"
+            [[ -n "$flags" ]]  && echo "    flags: $(_ac_yaml_quote "$flags")"
+            [[ -n "$color" ]]  && echo "    color: $(_ac_yaml_quote "$color")"
+            [[ -n "$title" ]]  && echo "    title: $(_ac_yaml_quote "$title")"
+            [[ -n "$prompt" ]] && echo "    prompt: $(_ac_yaml_quote "$prompt")"
+            [[ -n "$alias" ]]  && echo "    alias: $(_ac_yaml_quote "$alias")"
         done
 
-        if (( ${#_LK_TRACKED_APP_NAMES[@]} > 0 )); then
+        if (( ${#_AC_TRACKED_APP_NAMES[@]} > 0 )); then
             echo ""
             echo "tracked_apps:"
             local app a_path a_file a_key a_pat
-            for app in "${_LK_TRACKED_APP_NAMES[@]}"; do
+            for app in "${_AC_TRACKED_APP_NAMES[@]}"; do
                 [[ -z "$app" ]] && continue
-                echo "  $(_lk_yaml_quote "$app"):"
-                a_path="$(_lk_app_field "$app" path)"
-                a_file="$(_lk_app_field "$app" version_file)"
-                a_key="$(_lk_app_field "$app" version_key)"
-                a_pat="$(_lk_app_field "$app" version_pattern)"
-                [[ -n "$a_path" ]] && echo "    path: $(_lk_yaml_quote "${a_path/#$HOME/\~}")"
-                [[ -n "$a_file" ]] && echo "    version_file: $(_lk_yaml_quote "$a_file")"
-                [[ -n "$a_key" ]]  && echo "    version_key: $(_lk_yaml_quote "$a_key")"
-                [[ -n "$a_pat" ]]  && echo "    version_pattern: $(_lk_yaml_quote "$a_pat")"
+                echo "  $(_ac_yaml_quote "$app"):"
+                a_path="$(_ac_app_field "$app" path)"
+                a_file="$(_ac_app_field "$app" version_file)"
+                a_key="$(_ac_app_field "$app" version_key)"
+                a_pat="$(_ac_app_field "$app" version_pattern)"
+                [[ -n "$a_path" ]] && echo "    path: $(_ac_yaml_quote "${a_path/#$HOME/\~}")"
+                [[ -n "$a_file" ]] && echo "    version_file: $(_ac_yaml_quote "$a_file")"
+                [[ -n "$a_key" ]]  && echo "    version_key: $(_ac_yaml_quote "$a_key")"
+                [[ -n "$a_pat" ]]  && echo "    version_pattern: $(_ac_yaml_quote "$a_pat")"
             done
         fi
         :
-    } > "$_LK_CONFIG_FILE"
+    } > "$_AC_CONFIG_FILE"
 }
 
 # --- CLI Detection and Flag Parsing ---
-_LK_KNOWN_CLIS=(
+_AC_KNOWN_CLIS=(
     "kiro-cli:chat"
     "claude:"
     "aider:"
@@ -963,7 +970,7 @@ _LK_KNOWN_CLIS=(
 # public docs, but this has not been confirmed against a local install. Its
 # list-sessions command and picker flag are unknown, so session-aware menu
 # entries and the picker are disabled for claude until verified.
-_LK_CLI_CAPS=(
+_AC_CLI_CAPS=(
     "kiro-cli|--resume|chat --list-sessions --format json|--resume-picker"
     "claude|--continue||"
     "aider|||"
@@ -972,19 +979,19 @@ _LK_CLI_CAPS=(
     "amp|||"
 )
 
-# Split a capability entry into fields. Sets _LK_CAP_FIELDS (indexed 0..3):
+# Split a capability entry into fields. Sets _AC_CAP_FIELDS (indexed 0..3):
 # 0=tool 1=resume-flag 2=list-argv 3=picker-flag. Returns 1 if not found.
-_lk_cli_caps_fields() {
+_ac_cli_caps_fields() {
     local tool="${1:-}" entry
-    _LK_CAP_FIELDS=()
-    for entry in "${_LK_CLI_CAPS[@]}"; do
+    _AC_CAP_FIELDS=()
+    for entry in "${_AC_CLI_CAPS[@]}"; do
         if [[ "${entry%%|*}" == "$tool" ]]; then
             local IFS='|'
             # zsh's `read` splits into an array with -A, not bash's -a.
             if [[ -n "${ZSH_VERSION:-}" ]]; then
-                read -rA _LK_CAP_FIELDS <<< "$entry"
+                read -rA _AC_CAP_FIELDS <<< "$entry"
             else
-                read -ra _LK_CAP_FIELDS <<< "$entry"
+                read -ra _AC_CAP_FIELDS <<< "$entry"
             fi
             return 0
         fi
@@ -993,31 +1000,31 @@ _lk_cli_caps_fields() {
 }
 
 # Print the resume flag for a tool, or nothing if resume is unsupported.
-_lk_cli_resume_flag() {
-    _lk_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_LK_CAP_FIELDS[1]:-}"
+_ac_cli_resume_flag() {
+    _ac_cli_caps_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CAP_FIELDS[1]:-}"
     return 0
 }
 
 # Print the list-sessions argv (space-separated) for a tool, or nothing if the
 # tool has no session-listing capability.
-_lk_cli_list_argv() {
-    _lk_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_LK_CAP_FIELDS[2]:-}"
+_ac_cli_list_argv() {
+    _ac_cli_caps_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CAP_FIELDS[2]:-}"
     return 0
 }
 
 # Print the picker flag for a tool, or nothing if the tool has no session picker.
-_lk_cli_picker_flag() {
-    _lk_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_LK_CAP_FIELDS[3]:-}"
+_ac_cli_picker_flag() {
+    _ac_cli_caps_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CAP_FIELDS[3]:-}"
     return 0
 }
 
-_lk_detect_clis() {
+_ac_detect_clis() {
     # Returns list of available CLI tools on PATH
     local -a found=()
-    for entry in "${_LK_KNOWN_CLIS[@]}"; do
+    for entry in "${_AC_KNOWN_CLIS[@]}"; do
         local tool="${entry%%:*}"
         if command -v "$tool" &>/dev/null; then
             found+=("$tool")
@@ -1026,10 +1033,10 @@ _lk_detect_clis() {
     echo "${found[*]}"
 }
 
-_lk_get_default_launch() {
+_ac_get_default_launch() {
     # Get the default launch subcommand for a tool
     local tool="$1"
-    for entry in "${_LK_KNOWN_CLIS[@]}"; do
+    for entry in "${_AC_KNOWN_CLIS[@]}"; do
         local t="${entry%%:*}"
         local subcmd="${entry#*:}"
         if [[ "$t" == "$tool" ]]; then
@@ -1039,12 +1046,12 @@ _lk_get_default_launch() {
     done
 }
 
-_lk_parse_cli_flags() {
+_ac_parse_cli_flags() {
     # Parse flags from --help output, with caching
     # Output format: --flag or --flag=<PARAM> (one per line)
     local tool="$1"
     local subcmd="$2"
-    local cache="${TMPDIR:-/tmp}/lk-flags-${tool}.cache"
+    local cache="${TMPDIR:-/tmp}/ac-flags-${tool}.cache"
 
     # Use cache if less than 1 hour old
     if [[ -f "$cache" ]]; then
@@ -1103,10 +1110,10 @@ _lk_parse_cli_flags() {
     echo "$flags"
 }
 
-_lk_get_flag_opts() {
+_ac_get_flag_opts() {
     # Return flag options for the config editor (dynamic based on configured CLI)
     local flags
-    flags=$(_lk_parse_cli_flags "$_LK_CLI_TOOL" "$_LK_CLI_LAUNCH")
+    flags=$(_ac_parse_cli_flags "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH")
 
     if [[ -z "$flags" ]]; then
         # Fallback to basic options
@@ -1128,11 +1135,11 @@ _lk_get_flag_opts() {
     echo "none (use default)"
 }
 
-_lk_config_edit_cli_tool() {
-    _lk_clear
+_ac_config_edit_cli_tool() {
+    _ac_clear
     local -a available=()
     local detected
-    detected=$(_lk_detect_clis)
+    detected=$(_ac_detect_clis)
 
     if [[ -z "$detected" ]]; then
         echo "  No known AI CLI tools found on PATH."
@@ -1140,15 +1147,15 @@ _lk_config_edit_cli_tool() {
         local val
         read -r val
         if [[ -n "$val" ]]; then
-            _LK_CLI_TOOL="$val"
+            _AC_CLI_TOOL="$val"
             printf "  Subcommand (blank for none): "
             local sub
             read -r sub
-            _LK_CLI_LAUNCH="$sub"
+            _AC_CLI_LAUNCH="$sub"
             # Invalidate flag cache
-            rm -f "${TMPDIR:-/tmp}/lk-flags-${val}.cache"
-            _lk_write_config
-            printf "  ✓ Saved: %s %s\n" "$_LK_CLI_TOOL" "$_LK_CLI_LAUNCH"
+            rm -f "${TMPDIR:-/tmp}/ac-flags-${val}.cache"
+            _ac_write_config
+            printf "  ✓ Saved: %s %s\n" "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH"
         fi
         return
     fi
@@ -1163,9 +1170,9 @@ _lk_config_edit_cli_tool() {
     local i=1
     for tool in "${available[@]}"; do
         local subcmd
-        subcmd=$(_lk_get_default_launch "$tool")
+        subcmd=$(_ac_get_default_launch "$tool")
         local marker=""
-        [[ "$tool" == "$_LK_CLI_TOOL" ]] && marker=" (current)"
+        [[ "$tool" == "$_AC_CLI_TOOL" ]] && marker=" (current)"
         printf "    %d. %s" "$i" "$tool"
         [[ -n "$subcmd" ]] && printf " %s" "$subcmd"
         printf "%s\n" "$marker"
@@ -1174,96 +1181,96 @@ _lk_config_edit_cli_tool() {
     printf "    %d. other (enter manually)\n" "$i"
 
     printf "\n  › "
-    local _lk_inp
-    read -r _lk_inp || return
+    local _ac_inp
+    read -r _ac_inp || return
 
-    if [[ ! "$_lk_inp" =~ ^[0-9]+$ ]] || (( _lk_inp < 1 || _lk_inp > i )); then
+    if [[ ! "$_ac_inp" =~ ^[0-9]+$ ]] || (( _ac_inp < 1 || _ac_inp > i )); then
         echo "  Invalid selection"
         return
     fi
 
-    if (( _lk_inp == i )); then
+    if (( _ac_inp == i )); then
         printf "  CLI tool name: "
         local val
         read -r val
         [[ -z "$val" ]] && return
-        _LK_CLI_TOOL="$val"
+        _AC_CLI_TOOL="$val"
         printf "  Subcommand (blank for none): "
         local sub
         read -r sub
-        _LK_CLI_LAUNCH="$sub"
+        _AC_CLI_LAUNCH="$sub"
     else
-        local selected="${available[$((_lk_inp - 1))]}"
-        _LK_CLI_TOOL="$selected"
-        _LK_CLI_LAUNCH=$(_lk_get_default_launch "$selected")
+        local selected="${available[$((_ac_inp - 1))]}"
+        _AC_CLI_TOOL="$selected"
+        _AC_CLI_LAUNCH=$(_ac_get_default_launch "$selected")
     fi
 
     # Invalidate flag cache
-    rm -f "${TMPDIR:-/tmp}/lk-flags-${_LK_CLI_TOOL}.cache"
-    _lk_write_config
-    printf "  ✓ Saved: %s %s\n" "$_LK_CLI_TOOL" "$_LK_CLI_LAUNCH"
+    rm -f "${TMPDIR:-/tmp}/ac-flags-${_AC_CLI_TOOL}.cache"
+    _ac_write_config
+    printf "  ✓ Saved: %s %s\n" "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH"
 }
 
-_lk_config_toggle_update_check() {
-    if [[ "$_LK_AUTO_UPDATE_CHECK" == "true" ]]; then
-        _LK_AUTO_UPDATE_CHECK="false"
+_ac_config_toggle_update_check() {
+    if [[ "$_AC_AUTO_UPDATE_CHECK" == "true" ]]; then
+        _AC_AUTO_UPDATE_CHECK="false"
         printf "\n  ✓ Auto-update check: disabled\n"
     else
-        _LK_AUTO_UPDATE_CHECK="true"
+        _AC_AUTO_UPDATE_CHECK="true"
         printf "\n  ✓ Auto-update check: enabled\n"
     fi
-    _lk_write_config
+    _ac_write_config
     sleep 0.5
 }
 
-_lk_config_toggle_sessions() {
-    if [[ "${_LK_SHOW_SESSIONS:-false}" == "true" ]]; then
-        _LK_SHOW_SESSIONS="false"
+_ac_config_toggle_sessions() {
+    if [[ "${_AC_SHOW_SESSIONS:-false}" == "true" ]]; then
+        _AC_SHOW_SESSIONS="false"
         printf "\n  ✓ Session display: disabled\n"
     else
-        _LK_SHOW_SESSIONS="true"
+        _AC_SHOW_SESSIONS="true"
         printf "\n  ✓ Session display: enabled\n"
     fi
-    _lk_write_config
+    _ac_write_config
     sleep 0.5
 }
 
 # Toggle sort order between the two supported values: "name" (alphabetical,
 # the default) and "recent" (most-recently-launched first). The recency sort
-# itself is applied in _lk_collect_projects; this only flips the stored value.
-_lk_config_toggle_sort_order() {
-    if [[ "${_LK_SORT_ORDER:-name}" == "recent" ]]; then
-        _LK_SORT_ORDER="name"
+# itself is applied in _ac_collect_projects; this only flips the stored value.
+_ac_config_toggle_sort_order() {
+    if [[ "${_AC_SORT_ORDER:-name}" == "recent" ]]; then
+        _AC_SORT_ORDER="name"
         printf "\n  ✓ Sort order: name (alphabetical)\n"
     else
-        _LK_SORT_ORDER="recent"
+        _AC_SORT_ORDER="recent"
         printf "\n  ✓ Sort order: recent (most-recently-launched first)\n"
     fi
-    _lk_write_config
+    _ac_write_config
     sleep 0.5
 }
 
 # Toggle the per-project git status summary shown on each menu row. Off by
 # default because it shells out to git per project on every render (the render
 # path guards each call and fails quiet for non-git directories).
-_lk_config_toggle_git_status() {
-    if [[ "${_LK_SHOW_GIT_STATUS:-false}" == "true" ]]; then
-        _LK_SHOW_GIT_STATUS="false"
+_ac_config_toggle_git_status() {
+    if [[ "${_AC_SHOW_GIT_STATUS:-false}" == "true" ]]; then
+        _AC_SHOW_GIT_STATUS="false"
         printf "\n  ✓ Git status: disabled\n"
     else
-        _LK_SHOW_GIT_STATUS="true"
+        _AC_SHOW_GIT_STATUS="true"
         printf "\n  ✓ Git status: enabled\n"
     fi
-    _lk_write_config
+    _ac_write_config
     sleep 0.5
 }
 
 # --- Theme System ---
-_LK_THEME_FILE="${HOME}/.config/kiro-launcher/theme.bash"
+_AC_THEME_FILE="${HOME}/.config/anycli/theme.bash"
 
 # Theme definitions: name|bg|fg|cursor|black|red|green|yellow|blue|purple|cyan|white|br_black|br_red|br_green|br_yellow|br_blue|br_purple|br_cyan|br_white|ps1_style
 # PS1 styles: minimal, arrow, powerline, lambda
-_LK_THEMES=(
+_AC_THEMES=(
     "Default|||||||||||||||||||||"
     "One Half Dark|#282C34|#DCDFE4|#A3B3CC|#282C34|#E06C75|#98C379|#E5C07B|#61AFEF|#C678DD|#56B6C2|#DCDFE4|#5A6374|#E06C75|#98C379|#E5C07B|#61AFEF|#C678DD|#56B6C2|#DCDFE4|arrow"
     "Catppuccin Mocha|#1E1E2E|#CDD6F4|#F5E0DC|#45475A|#F38BA8|#A6E3A1|#F9E2AF|#89B4FA|#CBA6F7|#94E2D5|#BAC2DE|#585B70|#F38BA8|#A6E3A1|#F9E2AF|#89B4FA|#CBA6F7|#94E2D5|#A6ADC8|arrow"
@@ -1274,7 +1281,7 @@ _LK_THEMES=(
     "Rosé Pine|#191724|#E0DEF4|#E0DEF4|#26233A|#EB6F92|#31748F|#F6C177|#9CCFD8|#C4A7E7|#EBBCBA|#E0DEF4|#6E6A86|#EB6F92|#31748F|#F6C177|#9CCFD8|#C4A7E7|#EBBCBA|#E0DEF4|arrow"
 )
 
-_lk_theme_field() {
+_ac_theme_field() {
     # Extract field by index from a theme entry
     local entry="$1" index="$2"
     local IFS='|'
@@ -1282,7 +1289,7 @@ _lk_theme_field() {
     echo "${fields[$index]:-}"
 }
 
-_lk_find_python() {
+_ac_find_python() {
     # Find a working Python interpreter
     # Must verify execution because Windows Store stubs pass 'command -v' but fail at runtime
     if command -v python3 &>/dev/null && python3 --version &>/dev/null; then
@@ -1309,13 +1316,13 @@ _lk_find_python() {
     done
 }
 
-_lk_detect_wt_settings() {
+_ac_detect_wt_settings() {
     # Find Windows Terminal settings.json from WSL or Git Bash
     local settings=""
 
     # Explicit override, used by tests and by users with a non-standard install
-    if [[ -n "${_LK_WT_SETTINGS_OVERRIDE:-}" ]]; then
-        printf '%s' "$_LK_WT_SETTINGS_OVERRIDE"
+    if [[ -n "${_AC_WT_SETTINGS_OVERRIDE:-}" ]]; then
+        printf '%s' "$_AC_WT_SETTINGS_OVERRIDE"
         return 0
     fi
 
@@ -1337,12 +1344,12 @@ _lk_detect_wt_settings() {
     echo "$settings"
 }
 
-_lk_is_windows_terminal() {
+_ac_is_windows_terminal() {
     # Detect if we're running inside Windows Terminal (WSL or Git Bash)
     [[ -n "${WT_SESSION:-}" || -n "${WT_PROFILE_ID:-}" ]] && return 0
     # WSL: check for Windows Terminal settings file
     local settings
-    settings=$(_lk_detect_wt_settings)
+    settings=$(_ac_detect_wt_settings)
     [[ -n "$settings" ]] && return 0
     return 1
 }
@@ -1358,7 +1365,7 @@ _lk_is_windows_terminal() {
 #      with no way back. Writes now go to a temp file and are moved into place
 #      with os.replace, which is atomic on POSIX and Windows.
 #   3. There was no backup. One is taken before the first modification.
-_LK_WT_PY_PRELUDE='
+_AC_WT_PY_PRELUDE='
 import json, os, shutil, sys, tempfile
 
 def _strip_jsonc(text):
@@ -1406,14 +1413,14 @@ def load_settings(path):
         return json.loads(_strip_jsonc(raw))
 
 def save_settings(path, data):
-    backup = path + ".lk-backup"
+    backup = path + ".ac-backup"
     if not os.path.exists(backup):
         try:
             shutil.copy2(path, backup)
         except OSError:
             pass
     directory = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".lk-wt-", suffix=".json")
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".ac-wt-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
@@ -1439,19 +1446,19 @@ def profile_key(profile, index):
 
 # Where the pre-theme colorScheme of each profile is recorded so that resetting
 # restores what the user had rather than deleting the field outright.
-_LK_WT_SCHEME_BACKUP="${HOME}/.config/kiro-launcher/wt-schemes.json"
+_AC_WT_SCHEME_BACKUP="${HOME}/.config/anycli/wt-schemes.json"
 
-_lk_apply_theme_windows() {
+_ac_apply_theme_windows() {
     # Apply theme to Windows Terminal settings.json
     local theme_entry="$1"
     local name bg fg cursor
-    name=$(_lk_theme_field "$theme_entry" 0)
-    bg=$(_lk_theme_field "$theme_entry" 1)
-    fg=$(_lk_theme_field "$theme_entry" 2)
-    cursor=$(_lk_theme_field "$theme_entry" 3)
+    name=$(_ac_theme_field "$theme_entry" 0)
+    bg=$(_ac_theme_field "$theme_entry" 1)
+    fg=$(_ac_theme_field "$theme_entry" 2)
+    cursor=$(_ac_theme_field "$theme_entry" 3)
 
     local settings
-    settings=$(_lk_detect_wt_settings)
+    settings=$(_ac_detect_wt_settings)
     if [[ -z "$settings" ]]; then
         printf "  ✗ Could not find Windows Terminal settings.json\n"
         return 1
@@ -1459,14 +1466,14 @@ _lk_apply_theme_windows() {
 
     # Build the color scheme JSON using python (available in WSL and Git Bash)
     local python_bin
-    python_bin=$(_lk_find_python)
+    python_bin=$(_ac_find_python)
     if [[ -z "$python_bin" ]]; then
         printf "  \e[31m✗ Failed: Python was not found. Install Python 3 or disable the Windows Store alias\n"
         printf "    (Settings > Apps > Advanced app settings > App execution aliases).\e[0m\n"
         return 1
     fi
-    mkdir -p "$(dirname "$_LK_WT_SCHEME_BACKUP")"
-    "$python_bin" -c "$_LK_WT_PY_PRELUDE"'
+    mkdir -p "$(dirname "$_AC_WT_SCHEME_BACKUP")"
+    "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]
 fields = sys.argv[2].split("|")
 scheme_backup_path = sys.argv[3]
@@ -1520,26 +1527,26 @@ with open(scheme_backup_path, "w", encoding="utf-8") as f:
 
 save_settings(settings_path, settings)
 print("OK:" + name)
-' "$settings" "$theme_entry" "$_LK_WT_SCHEME_BACKUP"
+' "$settings" "$theme_entry" "$_AC_WT_SCHEME_BACKUP"
 }
 
-_lk_reset_theme_windows() {
+_ac_reset_theme_windows() {
     # Remove custom colorScheme from Windows Terminal, restoring defaults
     local settings
-    settings=$(_lk_detect_wt_settings)
+    settings=$(_ac_detect_wt_settings)
     if [[ -z "$settings" ]]; then
         printf "Could not find Windows Terminal settings.json"
         return 1
     fi
 
     local python_bin
-    python_bin=$(_lk_find_python)
+    python_bin=$(_ac_find_python)
     if [[ -z "$python_bin" ]]; then
         printf "Python was not found. Install Python 3 or disable the Windows Store alias\n"
         printf "    (Settings > Apps > Advanced app settings > App execution aliases)."
         return 1
     fi
-    "$python_bin" -c "$_LK_WT_PY_PRELUDE"'
+    "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]
 scheme_backup_path = sys.argv[2]
 
@@ -1582,26 +1589,26 @@ except OSError:
     pass
 
 print("OK:Default")
-' "$settings" "$_LK_WT_SCHEME_BACKUP"
+' "$settings" "$_AC_WT_SCHEME_BACKUP"
 }
 
-_lk_apply_theme_linux() {
+_ac_apply_theme_linux() {
     # Apply theme as PS1 prompt + dircolors for Linux terminals
     local theme_entry="$1"
     local name fg green blue purple cyan
-    name=$(_lk_theme_field "$theme_entry" 0)
-    fg=$(_lk_theme_field "$theme_entry" 2)
-    green=$(_lk_theme_field "$theme_entry" 6)
-    blue=$(_lk_theme_field "$theme_entry" 8)
-    purple=$(_lk_theme_field "$theme_entry" 9)
-    cyan=$(_lk_theme_field "$theme_entry" 10)
+    name=$(_ac_theme_field "$theme_entry" 0)
+    fg=$(_ac_theme_field "$theme_entry" 2)
+    green=$(_ac_theme_field "$theme_entry" 6)
+    blue=$(_ac_theme_field "$theme_entry" 8)
+    purple=$(_ac_theme_field "$theme_entry" 9)
+    cyan=$(_ac_theme_field "$theme_entry" 10)
     local ps1_style
-    ps1_style=$(_lk_theme_field "$theme_entry" 20)
+    ps1_style=$(_ac_theme_field "$theme_entry" 20)
 
     # Convert hex to 256-color escape (approximate)
     # We'll use direct RGB escapes (truecolor) since most modern terminals support it
     local dir
-    dir="$(dirname "$_LK_THEME_FILE")"
+    dir="$(dirname "$_AC_THEME_FILE")"
     mkdir -p "$dir"
 
     # Generate PS1 based on style
@@ -1621,9 +1628,9 @@ _lk_apply_theme_linux() {
             ;;
     esac
 
-    cat > "$_LK_THEME_FILE" <<EOF
-# Kiro Launcher Theme: $name
-# Applied by kiro-launcher — do not edit manually
+    cat > "$_AC_THEME_FILE" <<EOF
+# anycli Theme: $name
+# Applied by anycli — do not edit manually
 
 # Git prompt support
 if [[ -f /usr/lib/git-core/git-sh-prompt ]]; then
@@ -1644,7 +1651,7 @@ EOF
     printf "OK:%s" "$name"
 }
 
-_lk_config_theme() {
+_ac_config_theme() {
     local reset=$'\e[0m'
     local c_title=$'\e[1;36m'
     local c_dim=$'\e[2m'
@@ -1654,12 +1661,12 @@ _lk_config_theme() {
     local c_val=$'\e[0;35m'
 
     while true; do
-        _lk_clear
+        _ac_clear
         printf "\n  %s──  Theme  ───────────────────────────%s\n\n" "$c_title" "$reset"
 
         # Detect platform
         local platform="linux"
-        if _lk_is_windows_terminal; then
+        if _ac_is_windows_terminal; then
             platform="windows"
             printf "  %sPlatform: Windows Terminal%s\n" "$c_dim" "$reset"
             printf "  %sApplies: color scheme, font, opacity to all profiles%s\n\n" "$c_dim" "$reset"
@@ -1669,14 +1676,14 @@ _lk_config_theme() {
         fi
 
         # Current theme
-        local current_theme="${_LK_THEME:-Default}"
+        local current_theme="${_AC_THEME:-Default}"
         printf "  Current: %s%s%s\n\n" "$c_val" "$current_theme" "$reset"
 
         # List themes with color previews
         local ti=1
-        for theme_entry in "${_LK_THEMES[@]}"; do
+        for theme_entry in "${_AC_THEMES[@]}"; do
             local t_name t_bg t_fg t_red t_green t_yellow t_blue t_purple t_cyan
-            t_name=$(_lk_theme_field "$theme_entry" 0)
+            t_name=$(_ac_theme_field "$theme_entry" 0)
 
             # Show theme name with color swatches (using the theme's actual colors)
             local marker=""
@@ -1706,43 +1713,43 @@ _lk_config_theme() {
 
         # Font & opacity (Windows only)
         if [[ "$choice" == "f" || "$choice" == "F" ]] && [[ "$platform" == "windows" ]]; then
-            _lk_config_theme_font
+            _ac_config_theme_font
             continue
         fi
 
         # Validate number selection
-        if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#_LK_THEMES[@]} )); then
+        if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#_AC_THEMES[@]} )); then
             continue
         fi
 
-        local selected="${_LK_THEMES[$((choice - 1))]}"
+        local selected="${_AC_THEMES[$((choice - 1))]}"
         local selected_name
-        selected_name=$(_lk_theme_field "$selected" 0)
+        selected_name=$(_ac_theme_field "$selected" 0)
 
         printf "\n  Applying %s...\n" "$selected_name"
 
         local result=""
         if [[ "$selected_name" == "Default" ]]; then
             if [[ "$platform" == "windows" ]]; then
-                result=$(_lk_reset_theme_windows 2>&1)
+                result=$(_ac_reset_theme_windows 2>&1)
             else
                 # Linux: remove the theme file
-                rm -f "$_LK_THEME_FILE"
+                rm -f "$_AC_THEME_FILE"
                 result="OK:Default"
             fi
         elif [[ "$platform" == "windows" ]]; then
-            result=$(_lk_apply_theme_windows "$selected" 2>&1)
+            result=$(_ac_apply_theme_windows "$selected" 2>&1)
         else
-            result=$(_lk_apply_theme_linux "$selected" 2>&1)
+            result=$(_ac_apply_theme_linux "$selected" 2>&1)
         fi
 
         if [[ "$result" == OK:* ]]; then
-            _LK_THEME="$selected_name"
-            _lk_write_config
+            _AC_THEME="$selected_name"
+            _ac_write_config
             printf "  %s✓ Theme applied: %s%s\n" "$c_prompt" "$selected_name" "$reset"
             if [[ "$platform" == "linux" ]]; then
-                printf "  %sRun: source %s%s\n" "$c_dim" "$_LK_THEME_FILE" "$reset"
-                printf "  %s(Add to .bashrc: source %s)%s\n" "$c_dim" "$_LK_THEME_FILE" "$reset"
+                printf "  %sRun: source %s%s\n" "$c_dim" "$_AC_THEME_FILE" "$reset"
+                printf "  %s(Add to .bashrc: source %s)%s\n" "$c_dim" "$_AC_THEME_FILE" "$reset"
             else
                 printf "  %sReopen terminal tabs to see changes.%s\n" "$c_dim" "$reset"
             fi
@@ -1755,7 +1762,7 @@ _lk_config_theme() {
     done
 }
 
-_lk_config_theme_font() {
+_ac_config_theme_font() {
     local reset=$'\e[0m'
     local c_title=$'\e[1;36m'
     local c_dim=$'\e[2m'
@@ -1764,7 +1771,7 @@ _lk_config_theme_font() {
     local c_prompt=$'\e[1;32m'
     local c_val=$'\e[0;35m'
 
-    _lk_clear
+    _ac_clear
     printf "\n  %s──  Font & Opacity  ─────────────────%s\n\n" "$c_title" "$reset"
 
     # Recommended fonts
@@ -1807,7 +1814,7 @@ _lk_config_theme_font() {
     # Apply via python
     if [[ -n "$selected_font" || -n "$opacity_val" ]]; then
         local settings
-        settings=$(_lk_detect_wt_settings)
+        settings=$(_ac_detect_wt_settings)
         if [[ -z "$settings" ]]; then
             printf "  ✗ Could not find Windows Terminal settings.json\n"
             printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
@@ -1816,7 +1823,7 @@ _lk_config_theme_font() {
         fi
 
         local python_bin
-        python_bin=$(_lk_find_python)
+        python_bin=$(_ac_find_python)
         if [[ -z "$python_bin" ]]; then
             printf "  \e[31m✗ Failed: Python was not found. Install Python 3 or disable the Windows Store alias\n"
             printf "    (Settings > Apps > Advanced app settings > App execution aliases).\e[0m\n"
@@ -1825,7 +1832,7 @@ _lk_config_theme_font() {
             return
         fi
 
-        "$python_bin" -c "$_LK_WT_PY_PRELUDE"'
+        "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]
 font_name = sys.argv[2] if len(sys.argv) > 2 else ""
 opacity = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -1873,23 +1880,23 @@ print("OK")
 }
 
 # Shared project picker for the config editors.
-# Sets _LK_PICKED_PROJECT and returns 0, or returns 1 when cancelled.
-_lk_config_pick_project() {
+# Sets _AC_PICKED_PROJECT and returns 0, or returns 1 when cancelled.
+_ac_config_pick_project() {
     local label="${1:-Select project}"
     local c_num=$'\e[1;33m' c_name=$'\e[0;37m' c_prompt=$'\e[1;32m'
     local c_val=$'\e[0;35m' c_dim=$'\e[2m' reset=$'\e[0m'
 
-    _LK_PICKED_PROJECT=""
-    _lk_collect_projects
+    _AC_PICKED_PROJECT=""
+    _ac_collect_projects
 
     local -a names=()
     local dir
-    for dir in "${_LK_PROJECT_DIRS[@]+"${_LK_PROJECT_DIRS[@]}"}"; do
+    for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
         names+=("$(basename "$dir")")
     done
 
     if (( ${#names[@]} == 0 )); then
-        printf "\n    %s(no projects found in %s)%s\n" "$c_dim" "$_LK_PROJECTS_DIR" "$reset"
+        printf "\n    %s(no projects found in %s)%s\n" "$c_dim" "$_AC_PROJECTS_DIR" "$reset"
         printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
         read -r -n 1
         return 1
@@ -1898,7 +1905,7 @@ _lk_config_pick_project() {
     printf "\n  %s:\n" "$label"
     local i=1 n existing
     for n in "${names[@]}"; do
-        existing="$(_lk_lookup_alias "$n")"
+        existing="$(_ac_lookup_alias "$n")"
         if [[ -n "$existing" ]]; then
             printf "   %s%2d%s  %s%s%s  %s(%s)%s\n" "$c_num" "$i" "$reset" \
                 "$c_name" "$n" "$reset" "$c_val" "$existing" "$reset"
@@ -1916,8 +1923,8 @@ _lk_config_pick_project() {
     [[ "$sel" =~ ^[0-9]+$ ]] || return 1
     (( sel >= 1 && sel <= ${#names[@]} )) || return 1
 
-    _LK_PICKED_PROJECT="${names[$(( sel - 1 ))]}"
-    _lk_register_project "$_LK_PICKED_PROJECT"
+    _AC_PICKED_PROJECT="${names[$(( sel - 1 ))]}"
+    _ac_register_project "$_AC_PICKED_PROJECT"
     return 0
 }
 
@@ -1927,7 +1934,7 @@ _lk_config_pick_project() {
 # Reads a value; a blank clears (unsets) the variable, a non-blank is assigned
 # after optional regex validation. Writes the config on any accepted change.
 # Returns 1 (without writing) when validation fails so the caller can re-loop.
-_lk_edit_style_field() {
+_ac_edit_style_field() {
     local varname="$1" prompt_text="$2" regex="${3:-}" err_label="${4:-value}"
     local c_err=$'\e[31m' reset=$'\e[0m'
     printf '  %s' "$prompt_text"
@@ -1940,9 +1947,9 @@ _lk_edit_style_field() {
         sleep 1
         return 1
     else
-        _lk_assign "$varname" "$val"
+        _ac_assign "$varname" "$val"
     fi
-    _lk_write_config
+    _ac_write_config
     return 0
 }
 
@@ -1950,46 +1957,46 @@ _lk_edit_style_field() {
 #
 # color, title and prompt are documented in the README but were previously
 # editable only by hand-editing the YAML file.
-_lk_config_edit_project_style() {
+_ac_config_edit_project_style() {
     local c_dim=$'\e[2m' c_title=$'\e[1;36m' c_num=$'\e[1;33m'
     local c_name=$'\e[0;37m' c_prompt=$'\e[1;32m' c_val=$'\e[0;35m'
     local reset=$'\e[0m'
 
-    _lk_clear
+    _ac_clear
     printf "\n  %sPer-Project Appearance%s\n" "$c_title" "$reset"
     printf "  %s(color or title opens the project in a new terminal tab)%s\n" "$c_dim" "$reset"
 
     # Current settings
     local varname
     local found=0
-    for varname in $(_lk_vars_with_prefix _LK_PROJECT_COLOR_ | sort); do
-        printf "    %s → %scolor %s%s\n" "$(_lk_project_name "${varname#_LK_PROJECT_COLOR_}")" \
-            "$c_val" "$(_lk_indirect "$varname")" "$reset"
+    for varname in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_ | sort); do
+        printf "    %s → %scolor %s%s\n" "$(_ac_project_name "${varname#_AC_PROJECT_COLOR_}")" \
+            "$c_val" "$(_ac_indirect "$varname")" "$reset"
         found=$(( found + 1 ))
     done
-    for varname in $(_lk_vars_with_prefix _LK_PROJECT_TITLE_ | sort); do
-        printf "    %s → %stitle %s%s\n" "$(_lk_project_name "${varname#_LK_PROJECT_TITLE_}")" \
-            "$c_val" "$(_lk_indirect "$varname")" "$reset"
+    for varname in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_ | sort); do
+        printf "    %s → %stitle %s%s\n" "$(_ac_project_name "${varname#_AC_PROJECT_TITLE_}")" \
+            "$c_val" "$(_ac_indirect "$varname")" "$reset"
         found=$(( found + 1 ))
     done
-    for varname in $(_lk_vars_with_prefix _LK_PROJECT_PROMPT_ | sort); do
-        printf "    %s → %sprompt %s%s\n" "$(_lk_project_name "${varname#_LK_PROJECT_PROMPT_}")" \
-            "$c_val" "$(_lk_indirect "$varname")" "$reset"
+    for varname in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_ | sort); do
+        printf "    %s → %sprompt %s%s\n" "$(_ac_project_name "${varname#_AC_PROJECT_PROMPT_}")" \
+            "$c_val" "$(_ac_indirect "$varname")" "$reset"
         found=$(( found + 1 ))
     done
     (( found == 0 )) && printf "    %s(none configured)%s\n" "$c_dim" "$reset"
 
-    _lk_config_pick_project "Select project" || return 0
-    local proj="$_LK_PICKED_PROJECT"
+    _ac_config_pick_project "Select project" || return 0
+    local proj="$_AC_PICKED_PROJECT"
     local safe
-    safe="$(_lk_safe_name "$proj")"
+    safe="$(_ac_safe_name "$proj")"
 
     while true; do
-        _lk_clear
+        _ac_clear
         local cur_color cur_title cur_prompt
-        cur_color="$(_lk_indirect "_LK_PROJECT_COLOR_${safe}")"
-        cur_title="$(_lk_indirect "_LK_PROJECT_TITLE_${safe}")"
-        cur_prompt="$(_lk_indirect "_LK_PROJECT_PROMPT_${safe}")"
+        cur_color="$(_ac_indirect "_AC_PROJECT_COLOR_${safe}")"
+        cur_title="$(_ac_indirect "_AC_PROJECT_TITLE_${safe}")"
+        cur_prompt="$(_ac_indirect "_AC_PROJECT_PROMPT_${safe}")"
 
         printf "\n  %sAppearance for: %s%s\n\n" "$c_title" "$proj" "$reset"
         printf "   %s 1%s  %scolor%s   %s%s%s\n"  "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${cur_color:-(none)}" "$reset"
@@ -2004,21 +2011,21 @@ _lk_config_edit_project_style() {
 
         case "$choice" in
             1)
-                _lk_edit_style_field "_LK_PROJECT_COLOR_${safe}" \
+                _ac_edit_style_field "_AC_PROJECT_COLOR_${safe}" \
                     "Hex color (e.g. #00cc66, blank to clear): " \
                     '^#[0-9a-fA-F]{6}$' "6-digit hex color" || continue
                 ;;
             2)
-                _lk_edit_style_field "_LK_PROJECT_TITLE_${safe}" \
+                _ac_edit_style_field "_AC_PROJECT_TITLE_${safe}" \
                     "Tab title (blank to clear): "
                 ;;
             3)
-                _lk_edit_style_field "_LK_PROJECT_PROMPT_${safe}" \
+                _ac_edit_style_field "_AC_PROJECT_PROMPT_${safe}" \
                     "Initial prompt (blank to clear): "
                 ;;
             c|C)
-                unset "_LK_PROJECT_COLOR_${safe}" "_LK_PROJECT_TITLE_${safe}" "_LK_PROJECT_PROMPT_${safe}"
-                _lk_write_config
+                unset "_AC_PROJECT_COLOR_${safe}" "_AC_PROJECT_TITLE_${safe}" "_AC_PROJECT_PROMPT_${safe}"
+                _ac_write_config
                 ;;
             d|D) return 0 ;;
             *) continue ;;
@@ -2027,10 +2034,10 @@ _lk_config_edit_project_style() {
 }
 
 # --- Config Submenu ---
-_lk_config_menu() {
+_ac_config_menu() {
     while true; do
-        _lk_load_config
-        _lk_clear
+        _ac_load_config
+        _ac_clear
 
         local reset=$'\e[0m'
         local c_title=$'\e[1;36m'
@@ -2040,35 +2047,35 @@ _lk_config_menu() {
         local c_val=$'\e[0;35m'
 
         printf '\n'
-        printf "  %s──  Kiro Launcher Config  ────────%s\n\n" "$c_title" "$reset"
-        printf "  %s 1%s  %sProjects directory%s   %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_LK_PROJECTS_DIR" "$reset"
-        printf "  %s 2%s  %sDefault flags%s        %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_LK_KIRO_FLAGS:-(none)}" "$reset"
+        printf "  %s──  anycli Config  ────────%s\n\n" "$c_title" "$reset"
+        printf "  %s 1%s  %sProjects directory%s   %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_AC_PROJECTS_DIR" "$reset"
+        printf "  %s 2%s  %sDefault flags%s        %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_AC_CLI_FLAGS:-(none)}" "$reset"
         printf "  %s 3%s  %sPer-project flags%s\n" "$c_num" "$reset" "$c_name" "$reset"
 
         # Count per-project entries
         local count=0
-        for v in $(_lk_vars_with_prefix _LK_KIRO_FLAGS_); do ((count++)); done
+        for v in $(_ac_vars_with_prefix _AC_CLI_FLAGS_); do ((count++)); done
         if (( count > 0 )); then
             printf "      %s(%d configured)%s\n" "$c_val" "$count" "$reset"
         fi
 
-        printf "  %s 4%s  %sCLI tool%s             %s%s %s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_LK_CLI_TOOL" "$_LK_CLI_LAUNCH" "$reset"
-        printf "  %s 5%s  %sAuto-update check%s    %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_LK_AUTO_UPDATE_CHECK" "$reset"
-        printf "  %s 6%s  %sTheme%s                %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_LK_THEME:-Default}" "$reset"
+        printf "  %s 4%s  %sCLI tool%s             %s%s %s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH" "$reset"
+        printf "  %s 5%s  %sAuto-update check%s    %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_AC_AUTO_UPDATE_CHECK" "$reset"
+        printf "  %s 6%s  %sTheme%s                %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_AC_THEME:-Default}" "$reset"
         printf "  %s 7%s  %sPer-project aliases%s\n" "$c_num" "$reset" "$c_name" "$reset"
 
         # Count alias entries
         local alias_count=0
-        for v in $(_lk_vars_with_prefix _LK_PROJECT_ALIAS_); do ((alias_count++)); done
+        for v in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do ((alias_count++)); done
         if (( alias_count > 0 )); then
             printf "      %s(%d configured)%s\n" "$c_val" "$alias_count" "$reset"
         fi
 
         printf "  %s 8%s  %sPer-project appearance%s\n" "$c_num" "$reset" "$c_name" "$reset"
         local style_count=0
-        for v in $(_lk_vars_with_prefix _LK_PROJECT_COLOR_) \
-                 $(_lk_vars_with_prefix _LK_PROJECT_TITLE_) \
-                 $(_lk_vars_with_prefix _LK_PROJECT_PROMPT_); do
+        for v in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_) \
+                 $(_ac_vars_with_prefix _AC_PROJECT_TITLE_) \
+                 $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do
             style_count=$(( style_count + 1 ))
         done
         if (( style_count > 0 )); then
@@ -2077,41 +2084,41 @@ _lk_config_menu() {
 
         # Show sessions toggle — only meaningful when the CLI can list sessions.
         local _sess_supported=""
-        [[ -n "$(_lk_cli_list_argv "$_LK_CLI_TOOL")" ]] && _sess_supported="1"
+        [[ -n "$(_ac_cli_list_argv "$_AC_CLI_TOOL")" ]] && _sess_supported="1"
         if [[ -n "$_sess_supported" ]]; then
-            printf "  %s 9%s  %sShow last session%s    %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_LK_SHOW_SESSIONS:-false}" "$reset"
+            printf "  %s 9%s  %sShow last session%s    %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_AC_SHOW_SESSIONS:-false}" "$reset"
         fi
 
-        printf "  %s s%s  %sSort order%s           %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_LK_SORT_ORDER:-name}" "$reset"
-        printf "  %s g%s  %sShow git status%s      %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_LK_SHOW_GIT_STATUS:-false}" "$reset"
+        printf "  %s s%s  %sSort order%s           %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_AC_SORT_ORDER:-name}" "$reset"
+        printf "  %s g%s  %sShow git status%s      %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_AC_SHOW_GIT_STATUS:-false}" "$reset"
 
         printf "\n"
         printf "  %s b%s  %sback%s\n" "$c_num" "$reset" "$c_name" "$reset"
         printf "\n  %s›%s " "$c_prompt" "$reset"
 
-        local _lk_inp
-        read -r _lk_inp || return
+        local _ac_inp
+        read -r _ac_inp || return
 
-        case "$_lk_inp" in
-            1) _lk_config_edit_projects_dir ;;
-            2) _lk_config_edit_default_flags ;;
-            3) _lk_config_edit_project_flags ;;
-            4) _lk_config_edit_cli_tool ;;
-            5) _lk_config_toggle_update_check ;;
-            6) _lk_config_theme ;;
-            7) _lk_config_edit_project_aliases ;;
-            8) _lk_config_edit_project_style ;;
-            9) [[ -n "$_sess_supported" ]] && _lk_config_toggle_sessions || echo "  Invalid selection" ;;
-            s|S) _lk_config_toggle_sort_order ;;
-            g|G) _lk_config_toggle_git_status ;;
+        case "$_ac_inp" in
+            1) _ac_config_edit_projects_dir ;;
+            2) _ac_config_edit_default_flags ;;
+            3) _ac_config_edit_project_flags ;;
+            4) _ac_config_edit_cli_tool ;;
+            5) _ac_config_toggle_update_check ;;
+            6) _ac_config_theme ;;
+            7) _ac_config_edit_project_aliases ;;
+            8) _ac_config_edit_project_style ;;
+            9) [[ -n "$_sess_supported" ]] && _ac_config_toggle_sessions || echo "  Invalid selection" ;;
+            s|S) _ac_config_toggle_sort_order ;;
+            g|G) _ac_config_toggle_git_status ;;
             b|B) return ;;
             *) echo "  Invalid selection" ;;
         esac
     done
 }
 
-_lk_config_edit_projects_dir() {
-    printf "\n  Current: %s\n" "$_LK_PROJECTS_DIR"
+_ac_config_edit_projects_dir() {
+    printf "\n  Current: %s\n" "$_AC_PROJECTS_DIR"
     printf "  New value (blank to keep): "
     local val
     read -r val
@@ -2127,15 +2134,15 @@ _lk_config_edit_projects_dir() {
                 return
             fi
         fi
-        _LK_PROJECTS_DIR="$val"
-        _lk_write_config
+        _AC_PROJECTS_DIR="$val"
+        _ac_write_config
         printf "  ✓ Saved\n"
     else
         printf "  — No changes\n"
     fi
 }
 
-_lk_config_edit_default_flags() {
+_ac_config_edit_default_flags() {
     local c_dim=$'\e[2m'
     local c_title=$'\e[1;36m'
     local c_num=$'\e[1;33m'
@@ -2147,13 +2154,13 @@ _lk_config_edit_default_flags() {
     local -a flag_opts=()
     while IFS= read -r fline; do
         [[ -n "$fline" ]] && flag_opts+=("$fline")
-    done < <(_lk_get_flag_opts)
+    done < <(_ac_get_flag_opts)
 
     while true; do
-        _lk_clear
+        _ac_clear
         printf "\n  %sDefault Flags%s\n" "$c_title" "$reset"
         printf "  %s(these apply to ALL projects)%s\n" "$c_dim" "$reset"
-        printf "  Current: %s%s%s\n\n" "$c_val" "${_LK_KIRO_FLAGS:-(none)}" "$reset"
+        printf "  Current: %s%s%s\n\n" "$c_val" "${_AC_CLI_FLAGS:-(none)}" "$reset"
 
         printf "  Add a flag:\n"
         local ci=1
@@ -2171,8 +2178,8 @@ _lk_config_edit_default_flags() {
 
         [[ "$cnum" == "d" || "$cnum" == "D" ]] && return
         if [[ "$cnum" == "c" || "$cnum" == "C" ]]; then
-            _LK_KIRO_FLAGS=""
-            _lk_write_config
+            _AC_CLI_FLAGS=""
+            _ac_write_config
             continue
         fi
 
@@ -2201,13 +2208,13 @@ _lk_config_edit_default_flags() {
         fi
 
         if [[ -n "$new_flag" ]]; then
-            _LK_KIRO_FLAGS="${_LK_KIRO_FLAGS:+$_LK_KIRO_FLAGS }$new_flag"
-            _lk_write_config
+            _AC_CLI_FLAGS="${_AC_CLI_FLAGS:+$_AC_CLI_FLAGS }$new_flag"
+            _ac_write_config
         fi
     done
 }
 
-_lk_config_edit_project_flags() {
+_ac_config_edit_project_flags() {
     local c_dim=$'\e[2m'
     local c_title=$'\e[1;36m'
     local c_num=$'\e[1;33m'
@@ -2216,47 +2223,47 @@ _lk_config_edit_project_flags() {
     local c_val=$'\e[0;35m'
     local reset=$'\e[0m'
 
-    _lk_clear
+    _ac_clear
     printf "\n  %sPer-Project Flags%s\n" "$c_title" "$reset"
     printf "  %s(additive — projects inherit default_flags automatically)%s\n\n" "$c_dim" "$reset"
 
     # Show current config
     local varname
     local found=0
-    for varname in $(_lk_vars_with_prefix _LK_KIRO_FLAGS_ | sort); do
-        local p="${varname#_LK_KIRO_FLAGS_}"
-        local v="$(_lk_indirect "$varname")"
+    for varname in $(_ac_vars_with_prefix _AC_CLI_FLAGS_ | sort); do
+        local p="${varname#_AC_CLI_FLAGS_}"
+        local v="$(_ac_indirect "$varname")"
         # Show the project name as the user wrote it, not the sanitized suffix
-        printf "    %s → %s%s%s\n" "$(_lk_project_name "$p")" "$c_val" "${v:-(inherit only)}" "$reset"
+        printf "    %s → %s%s%s\n" "$(_ac_project_name "$p")" "$c_val" "${v:-(inherit only)}" "$reset"
         ((found++))
     done
     (( found == 0 )) && printf "    %s(none configured)%s\n" "$c_dim" "$reset"
 
     # List available projects
-    _lk_config_pick_project "Select project" || return
-    local proj="$_LK_PICKED_PROJECT"
+    _ac_config_pick_project "Select project" || return
+    local proj="$_AC_PICKED_PROJECT"
     local safe
-    safe="$(_lk_safe_name "$proj")"
-    local varname="_LK_KIRO_FLAGS_${safe}"
+    safe="$(_ac_safe_name "$proj")"
+    local varname="_AC_CLI_FLAGS_${safe}"
     local current=""
-    _lk_indirect_set "$varname" && current="$(_lk_indirect "$varname")"
+    _ac_indirect_set "$varname" && current="$(_ac_indirect "$varname")"
 
     # Build flag options
     local -a flag_opts=()
     while IFS= read -r fline; do
         [[ -n "$fline" ]] && flag_opts+=("$fline")
-    done < <(_lk_get_flag_opts)
+    done < <(_ac_get_flag_opts)
 
     # Accumulating loop
     while true; do
-        _lk_clear
+        _ac_clear
         # Re-read current value
         current=""
-        _lk_indirect_set "$varname" && current="$(_lk_indirect "$varname")"
+        _ac_indirect_set "$varname" && current="$(_ac_indirect "$varname")"
 
         printf "\n  %sFlags for: %s%s\n" "$c_title" "$proj" "$reset"
         printf "  Current: %s%s%s\n\n" "$c_val" "${current:-(inherits defaults only)}" "$reset"
-        printf "  %sResolved: %s%s\n\n" "$c_dim" "$(_lk_get_flags "$proj")" "$reset"
+        printf "  %sResolved: %s%s\n\n" "$c_dim" "$(_ac_get_flags "$proj")" "$reset"
 
         printf "  Add a flag:\n"
         local ci=1
@@ -2275,13 +2282,13 @@ _lk_config_edit_project_flags() {
 
         [[ "$cnum" == "d" || "$cnum" == "D" ]] && return
         if [[ "$cnum" == "n" || "$cnum" == "N" ]]; then
-            _lk_assign "$varname" "none"
-            _lk_write_config
+            _ac_assign "$varname" "none"
+            _ac_write_config
             return
         fi
         if [[ "$cnum" == "c" || "$cnum" == "C" ]]; then
             unset "$varname"
-            _lk_write_config
+            _ac_write_config
             continue
         fi
 
@@ -2311,19 +2318,19 @@ _lk_config_edit_project_flags() {
 
         if [[ -n "$new_flag" ]]; then
             current=""
-            _lk_indirect_set "$varname" && current="$(_lk_indirect "$varname")"
+            _ac_indirect_set "$varname" && current="$(_ac_indirect "$varname")"
             if [[ "$current" == "none" ]]; then
-                _lk_assign "$varname" "$new_flag"
+                _ac_assign "$varname" "$new_flag"
             else
-                _lk_assign "$varname" "${current:+$current }$new_flag"
+                _ac_assign "$varname" "${current:+$current }$new_flag"
             fi
-            _lk_write_config
+            _ac_write_config
         fi
     done
 }
 
 
-_lk_config_edit_project_aliases() {
+_ac_config_edit_project_aliases() {
     local c_dim=$'\e[2m'
     local c_title=$'\e[1;36m'
     local c_num=$'\e[1;33m'
@@ -2332,28 +2339,28 @@ _lk_config_edit_project_aliases() {
     local c_val=$'\e[0;35m'
     local reset=$'\e[0m'
 
-    _lk_clear
+    _ac_clear
     printf "\n  %sPer-Project Aliases%s\n" "$c_title" "$reset"
     printf "  %s(display name shown in the menu instead of directory name)%s\n\n" "$c_dim" "$reset"
 
     # Show current aliases
     local varname
     local found=0
-    for varname in $(_lk_vars_with_prefix _LK_PROJECT_ALIAS_ | sort); do
-        local p="${varname#_LK_PROJECT_ALIAS_}"
-        local v="$(_lk_indirect "$varname")"
-        printf "    %s → %s%s%s\n" "$(_lk_project_name "$p")" "$c_val" "$v" "$reset"
+    for varname in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_ | sort); do
+        local p="${varname#_AC_PROJECT_ALIAS_}"
+        local v="$(_ac_indirect "$varname")"
+        printf "    %s → %s%s%s\n" "$(_ac_project_name "$p")" "$c_val" "$v" "$reset"
         ((found++))
     done
     (( found == 0 )) && printf "    %s(none configured)%s\n" "$c_dim" "$reset"
 
     # List available projects
-    _lk_config_pick_project "Select project" || return
-    local proj="$_LK_PICKED_PROJECT"
+    _ac_config_pick_project "Select project" || return
+    local proj="$_AC_PICKED_PROJECT"
     local safe
-    safe="$(_lk_safe_name "$proj")"
-    local varname="_LK_PROJECT_ALIAS_${safe}"
-    local current="$(_lk_indirect "$varname")"
+    safe="$(_ac_safe_name "$proj")"
+    local varname="_AC_PROJECT_ALIAS_${safe}"
+    local current="$(_ac_indirect "$varname")"
 
     printf "\n  %sAlias for: %s%s\n" "$c_title" "$proj" "$reset"
     printf "  Current: %s%s%s\n" "$c_val" "${current:-(none)}" "$reset"
@@ -2363,26 +2370,26 @@ _lk_config_edit_project_aliases() {
     read -r val
 
     if [[ -n "$val" ]]; then
-        _lk_assign "$varname" "$val"
+        _ac_assign "$varname" "$val"
     else
         unset "$varname"
     fi
-    _lk_write_config
+    _ac_write_config
 }
 # --- Changelog Viewer ---
-_lk_show_changelog() {
-    _lk_clear
-    local changelog="$_LK_SCRIPT_DIR/CHANGELOG.md"
+_ac_show_changelog() {
+    _ac_clear
+    local changelog="$_AC_SCRIPT_DIR/CHANGELOG.md"
     local reset=$'\e[0m'
     local c_title=$'\e[1;36m'
     local c_dim=$'\e[2m'
     local c_prompt=$'\e[1;32m'
 
     printf "\n  %s╭─────────────────────────────────────╮%s\n" "$c_title" "$reset"
-    local _lk_hdr="Changelog"
-    local _lk_ver="v$_LK_VERSION"
-    local _lk_pad=$(( 37 - 2 - ${#_lk_hdr} - 2 - ${#_lk_ver} ))
-    printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_lk_hdr" "$_lk_pad" "" "$c_dim" "$_lk_ver" "$reset" "$c_title" "$reset"
+    local _ac_hdr="Changelog"
+    local _ac_ver="v$_AC_VERSION"
+    local _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
+    printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
     printf "  %s╰─────────────────────────────────────╯%s\n\n" "$c_title" "$reset"
 
     if [[ -f "$changelog" ]]; then
@@ -2406,8 +2413,8 @@ _lk_show_changelog() {
 # Help screen for the menu's less-obvious keys (session resume/picker triggers).
 # Reached via "?" from the main menu; only lists triggers the configured CLI
 # actually supports, so the menu footer stays uncluttered for everyone else.
-_lk_show_key_help() {
-    _lk_clear
+_ac_show_key_help() {
+    _ac_clear
     local reset=$'\e[0m'
     local c_title=$'\e[1;36m'
     local c_num=$'\e[1;33m'
@@ -2416,17 +2423,17 @@ _lk_show_key_help() {
     printf "\n  %sMenu keys%s\n\n" "$c_title" "$reset"
     printf "   %s<N>%s   launch project number N\n" "$c_num" "$reset"
 
-    if [[ -n "$(_lk_cli_resume_flag "$_LK_CLI_TOOL")" ]]; then
+    if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" ]]; then
         printf "   %sr<N>%s  resume project N's most recent session\n" "$c_num" "$reset"
     fi
-    if [[ -n "$(_lk_cli_picker_flag "$_LK_CLI_TOOL")" ]]; then
+    if [[ -n "$(_ac_cli_picker_flag "$_AC_CLI_TOOL")" ]]; then
         printf "   %sp<N>%s  pick a session to resume for project N\n" "$c_num" "$reset"
     fi
 
     printf "\n   %stype%s  filter the list by name    %s/%s  clear the filter\n" "$c_num" "$reset" "$c_num" "$reset"
     printf "   %s c%s   config    %s v%s  changelog    %s q%s  quit\n" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset"
 
-    if [[ -n "$(_lk_cli_resume_flag "$_LK_CLI_TOOL")" ]]; then
+    if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" ]]; then
         printf "\n  %sResume continues the CLI's last conversation in that project;%s\n" "$c_dim" "$reset"
         printf "  %sthe per-project startup prompt is skipped so it isn't re-seeded.%s\n" "$c_dim" "$reset"
     fi
@@ -2436,7 +2443,7 @@ _lk_show_key_help() {
 }
 
 # --- Platform Helpers ---
-_lk_kiro_data_dir() {
+_ac_kiro_cli_data_dir() {
     # Resolve the kiro-cli data directory for the current platform.
     # Returns the path to stdout. Returns 1 if no valid path found.
     #   Linux/WSL:          ~/.local/share/kiro-cli
@@ -2455,7 +2462,7 @@ _lk_kiro_data_dir() {
     fi
 }
 
-_lk_timeout() {
+_ac_timeout() {
     # Portable timeout wrapper. Uses `timeout` (Linux/Git Bash) or `gtimeout`
     # (macOS with coreutils). Falls back to direct execution without timeout
     # if neither is available (macOS without coreutils).
@@ -2472,9 +2479,9 @@ _lk_timeout() {
 }
 
 # --- Update Detection ---
-_LK_UPDATE_CACHE="${HOME}/.config/kiro-launcher/.update-check"
-_LK_UPDATE_CHECK_INTERVAL=14400  # 4 hours in seconds
-_LK_CLI_RELEASE_INDEX="https://desktop-release.q.us-east-1.amazonaws.com/index.json"
+_AC_UPDATE_CACHE="${HOME}/.config/anycli/.update-check"
+_AC_UPDATE_CHECK_INTERVAL=14400  # 4 hours in seconds
+_AC_CLI_RELEASE_INDEX="https://desktop-release.q.us-east-1.amazonaws.com/index.json"
 
 # Tracked apps are user-defined in config.yaml under "tracked_apps". The list
 # used to be hardcoded to the author's own repositories, which meant every
@@ -2491,18 +2498,18 @@ _LK_CLI_RELEASE_INDEX="https://desktop-release.q.us-east-1.amazonaws.com/index.j
 #       version_file: pyproject.toml
 #       version_key: "^version"          # optional line filter
 #       version_pattern: "[0-9]+\.[0-9]+\.[0-9]+"   # optional
-_LK_TRACKED_APP_NAMES=()
-_LK_DEFAULT_VERSION_PATTERN='[0-9]+\.[0-9]+\.[0-9]+'
+_AC_TRACKED_APP_NAMES=()
+_AC_DEFAULT_VERSION_PATTERN='[0-9]+\.[0-9]+\.[0-9]+'
 
 # Read one configured field for a tracked app.
-_lk_app_field() {
+_ac_app_field() {
     local name="${1:-}" field="${2:-}" safe
-    safe="$(_lk_safe_name "$name")"
+    safe="$(_ac_safe_name "$name")"
     case "$field" in
-        path)            _lk_indirect "_LK_APP_PATH_${safe}" ;;
-        version_file)    _lk_indirect "_LK_APP_VERFILE_${safe}" ;;
-        version_key)     _lk_indirect "_LK_APP_VERKEY_${safe}" ;;
-        version_pattern) _lk_indirect "_LK_APP_VERPAT_${safe}" ;;
+        path)            _ac_indirect "_AC_APP_PATH_${safe}" ;;
+        version_file)    _ac_indirect "_AC_APP_VERFILE_${safe}" ;;
+        version_key)     _ac_indirect "_AC_APP_VERKEY_${safe}" ;;
+        version_pattern) _ac_indirect "_AC_APP_VERPAT_${safe}" ;;
     esac
     return 0
 }
@@ -2511,13 +2518,13 @@ _lk_app_field() {
 #
 # Previously this ran a stored shell snippet through eval. It now greps a
 # configured file, so nothing from the config file is ever executed.
-_lk_get_app_version() {
+_ac_get_app_version() {
     local app_path="${1:-}" version_file="${2:-}" version_key="${3:-}" pattern="${4:-}"
     [[ -n "$app_path" && -d "$app_path" ]] || return 0
     [[ -n "$version_file" ]] || return 0
     local f="$app_path/$version_file"
     [[ -f "$f" ]] || return 0
-    [[ -n "$pattern" ]] || pattern="$_LK_DEFAULT_VERSION_PATTERN"
+    [[ -n "$pattern" ]] || pattern="$_AC_DEFAULT_VERSION_PATTERN"
 
     if [[ -n "$version_key" ]]; then
         grep -m1 -E "$version_key" "$f" 2>/dev/null | grep -oE "$pattern" 2>/dev/null | head -1
@@ -2528,17 +2535,17 @@ _lk_get_app_version() {
 }
 
 # Convenience wrapper: resolve every field for a named app and read its version.
-_lk_app_version() {
+_ac_app_version() {
     local name="${1:-}"
-    _lk_get_app_version \
-        "$(_lk_app_field "$name" path)" \
-        "$(_lk_app_field "$name" version_file)" \
-        "$(_lk_app_field "$name" version_key)" \
-        "$(_lk_app_field "$name" version_pattern)"
+    _ac_get_app_version \
+        "$(_ac_app_field "$name" path)" \
+        "$(_ac_app_field "$name" version_file)" \
+        "$(_ac_app_field "$name" version_key)" \
+        "$(_ac_app_field "$name" version_pattern)"
     return 0
 }
 
-_lk_semver_compare() {
+_ac_semver_compare() {
     # Compare two semver strings. Returns:
     #   0 if v1 == v2
     #   1 if v1 > v2
@@ -2562,7 +2569,7 @@ _lk_semver_compare() {
     return 0
 }
 
-_lk_check_cli_update_via_index() {
+_ac_check_cli_update_via_index() {
     # Check for kiro-cli updates by fetching the remote release index.
     # More reliable than running `kiro-cli update` which requires a TTY.
     # Sets cli_update (0/1) and cli_version in the calling scope.
@@ -2574,7 +2581,7 @@ _lk_check_cli_update_via_index() {
     fi
 
     local index_json latest_ver
-    index_json=$(_lk_timeout 10 curl -sf "$_LK_CLI_RELEASE_INDEX" 2>/dev/null) || true
+    index_json=$(_ac_timeout 10 curl -sf "$_AC_CLI_RELEASE_INDEX" 2>/dev/null) || true
     if [[ -z "$index_json" ]]; then
         return 1
     fi
@@ -2588,7 +2595,7 @@ _lk_check_cli_update_via_index() {
     fi
 
     # Compare: if latest is newer than current, update is available
-    _lk_semver_compare "$latest_ver" "$current_ver"
+    _ac_semver_compare "$latest_ver" "$current_ver"
     local cmp_result=$?
     if [[ $cmp_result -eq 1 ]]; then
         # latest > current — update available
@@ -2597,52 +2604,52 @@ _lk_check_cli_update_via_index() {
     fi
 }
 
-_lk_check_update_cache() {
+_ac_check_update_cache() {
     # Read cached update state. Sets:
-    #   _LK_CLI_UPDATE_AVAILABLE (0/1)
-    #   _LK_CLI_LATEST_VERSION (version string or "")
-    #   _LK_LAUNCHER_UPDATE_AVAILABLE (0/1)
-    #   _LK_LAUNCHER_COMMITS_BEHIND (number or "")
-    #   _LK_APPS_UPDATE_AVAILABLE (0/1)
-    #   _LK_APPS_UPDATE_LIST (space-separated app names with updates)
-    _LK_CLI_UPDATE_AVAILABLE=0
-    _LK_CLI_LATEST_VERSION=""
-    _LK_LAUNCHER_UPDATE_AVAILABLE=0
-    _LK_LAUNCHER_COMMITS_BEHIND=""
-    _LK_APPS_UPDATE_AVAILABLE=0
-    _LK_APPS_UPDATE_LIST=""
+    #   _AC_CLI_UPDATE_AVAILABLE (0/1)
+    #   _AC_CLI_LATEST_VERSION (version string or "")
+    #   _AC_LAUNCHER_UPDATE_AVAILABLE (0/1)
+    #   _AC_LAUNCHER_COMMITS_BEHIND (number or "")
+    #   _AC_APPS_UPDATE_AVAILABLE (0/1)
+    #   _AC_APPS_UPDATE_LIST (space-separated app names with updates)
+    _AC_CLI_UPDATE_AVAILABLE=0
+    _AC_CLI_LATEST_VERSION=""
+    _AC_LAUNCHER_UPDATE_AVAILABLE=0
+    _AC_LAUNCHER_COMMITS_BEHIND=""
+    _AC_APPS_UPDATE_AVAILABLE=0
+    _AC_APPS_UPDATE_LIST=""
 
-    [[ -f "$_LK_UPDATE_CACHE" ]] || return 1
+    [[ -f "$_AC_UPDATE_CACHE" ]] || return 1
 
     local key val
     while IFS='=' read -r key val || [[ -n "$key" ]]; do
         case "$key" in
-            CLI_UPDATE_AVAILABLE)      _LK_CLI_UPDATE_AVAILABLE="$val" ;;
-            CLI_LATEST_VERSION)        _LK_CLI_LATEST_VERSION="$val" ;;
-            LAUNCHER_UPDATE_AVAILABLE) _LK_LAUNCHER_UPDATE_AVAILABLE="$val" ;;
-            LAUNCHER_COMMITS_BEHIND)   _LK_LAUNCHER_COMMITS_BEHIND="$val" ;;
-            APPS_UPDATE_AVAILABLE)     _LK_APPS_UPDATE_AVAILABLE="$val" ;;
-            APPS_UPDATE_LIST)          _LK_APPS_UPDATE_LIST="$val" ;;
+            CLI_UPDATE_AVAILABLE)      _AC_CLI_UPDATE_AVAILABLE="$val" ;;
+            CLI_LATEST_VERSION)        _AC_CLI_LATEST_VERSION="$val" ;;
+            LAUNCHER_UPDATE_AVAILABLE) _AC_LAUNCHER_UPDATE_AVAILABLE="$val" ;;
+            LAUNCHER_COMMITS_BEHIND)   _AC_LAUNCHER_COMMITS_BEHIND="$val" ;;
+            APPS_UPDATE_AVAILABLE)     _AC_APPS_UPDATE_AVAILABLE="$val" ;;
+            APPS_UPDATE_LIST)          _AC_APPS_UPDATE_LIST="$val" ;;
         esac
-    done < "$_LK_UPDATE_CACHE"
+    done < "$_AC_UPDATE_CACHE"
 }
 
 # Perform the actual probes and persist the result to the cache file.
 # Runs in the background by default so the menu never waits on the network.
-_lk_update_probe() {
+_ac_update_probe() {
     local cli_update=0 cli_version="" launcher_update=0 launcher_behind=""
     local apps_update=0 apps_list=""
 
     # 1. kiro-cli, via the remote release index
     if command -v kiro-cli &>/dev/null; then
-        _lk_check_cli_update_via_index || true
+        _ac_check_cli_update_via_index || true
     fi
 
-    # 2. kiro-launcher, via git
-    if [[ -d "$_LK_SCRIPT_DIR/.git" ]]; then
-        _lk_timeout 10 git -C "$_LK_SCRIPT_DIR" fetch origin main --quiet 2>/dev/null || true
+    # 2. anycli, via git
+    if [[ -d "$_AC_SCRIPT_DIR/.git" ]]; then
+        _ac_timeout 10 git -C "$_AC_SCRIPT_DIR" fetch origin main --quiet 2>/dev/null || true
         local behind
-        behind=$(git -C "$_LK_SCRIPT_DIR" rev-list --count HEAD..origin/main 2>/dev/null) || true
+        behind=$(git -C "$_AC_SCRIPT_DIR" rev-list --count HEAD..origin/main 2>/dev/null) || true
         if [[ "$behind" =~ ^[0-9]+$ ]] && (( behind > 0 )); then
             launcher_update=1
             launcher_behind="$behind"
@@ -2651,13 +2658,13 @@ _lk_update_probe() {
 
     # 3. User-configured tracked apps
     local app_name app_path
-    for app_name in "${_LK_TRACKED_APP_NAMES[@]+"${_LK_TRACKED_APP_NAMES[@]}"}"; do
-        app_path="$(_lk_app_field "$app_name" path)"
+    for app_name in "${_AC_TRACKED_APP_NAMES[@]+"${_AC_TRACKED_APP_NAMES[@]}"}"; do
+        app_path="$(_ac_app_field "$app_name" path)"
         [[ -n "$app_path" && -d "$app_path/.git" ]] || continue
         local default_branch app_behind
         default_branch=$(git -C "$app_path" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@') || true
         [[ -z "$default_branch" ]] && default_branch="main"
-        _lk_timeout 10 git -C "$app_path" fetch origin "$default_branch" --quiet 2>/dev/null || true
+        _ac_timeout 10 git -C "$app_path" fetch origin "$default_branch" --quiet 2>/dev/null || true
         app_behind=$(git -C "$app_path" rev-list --count HEAD..origin/"$default_branch" 2>/dev/null) || true
         if [[ "$app_behind" =~ ^[0-9]+$ ]] && (( app_behind > 0 )); then
             apps_update=1
@@ -2667,7 +2674,7 @@ _lk_update_probe() {
 
     # Write the cache atomically so a reader never sees a half-written file
     local cache_dir tmp_cache
-    cache_dir="$(dirname "$_LK_UPDATE_CACHE")"
+    cache_dir="$(dirname "$_AC_UPDATE_CACHE")"
     mkdir -p "$cache_dir"
     tmp_cache="$(mktemp "${cache_dir}/.update-check.XXXXXX" 2>/dev/null)" || return 1
     cat > "$tmp_cache" <<EOF
@@ -2679,52 +2686,52 @@ LAUNCHER_COMMITS_BEHIND=${launcher_behind:-0}
 APPS_UPDATE_AVAILABLE=$apps_update
 APPS_UPDATE_LIST=$apps_list
 EOF
-    mv "$tmp_cache" "$_LK_UPDATE_CACHE" 2>/dev/null || rm -f "$tmp_cache"
+    mv "$tmp_cache" "$_AC_UPDATE_CACHE" 2>/dev/null || rm -f "$tmp_cache"
     return 0
 }
 
-_lk_update_check() {
+_ac_update_check() {
     # Time-gated update check. Skipped if auto_update_check config is off.
     #
     # The menu is rendered from the cache only; probes run in a background
     # subshell. Previously the kiro-cli index fetch and the launcher git fetch
-    # ran in the foreground, so every four hours the first lk invocation stalled
+    # ran in the foreground, so every four hours the first ac invocation stalled
     # on the network before drawing anything.
-    [[ "${_LK_AUTO_UPDATE_CHECK:-true}" == "true" ]] || return 0
+    [[ "${_AC_AUTO_UPDATE_CHECK:-true}" == "true" ]] || return 0
 
     # Show whatever the last completed probe found
-    _lk_check_update_cache || true
+    _ac_check_update_cache || true
 
     local last_check=0 key val now
-    if [[ -f "$_LK_UPDATE_CACHE" ]]; then
+    if [[ -f "$_AC_UPDATE_CACHE" ]]; then
         while IFS='=' read -r key val || [[ -n "$key" ]]; do
             [[ "$key" == "LAST_CHECK" ]] && last_check="$val"
-        done < "$_LK_UPDATE_CACHE"
+        done < "$_AC_UPDATE_CACHE"
     fi
     # A corrupt cache must not break arithmetic
     [[ "$last_check" =~ ^[0-9]+$ ]] || last_check=0
 
     now=$(date +%s)
-    if (( now - last_check < _LK_UPDATE_CHECK_INTERVAL )); then
+    if (( now - last_check < _AC_UPDATE_CHECK_INTERVAL )); then
         return 0
     fi
 
-    if [[ "${_LK_UPDATE_CHECK_SYNC:-0}" == "1" ]]; then
-        _lk_update_probe
-        _lk_check_update_cache || true
+    if [[ "${_AC_UPDATE_CHECK_SYNC:-0}" == "1" ]]; then
+        _ac_update_probe
+        _ac_check_update_cache || true
     else
-        ( _lk_update_probe ) >/dev/null 2>&1 &
+        ( _ac_update_probe ) >/dev/null 2>&1 &
         disown 2>/dev/null || true
     fi
     return 0
 }
 
-_lk_update_available() {
+_ac_update_available() {
     # Returns 0 (true) if any update is available, 1 (false) otherwise
-    [[ "${_LK_CLI_UPDATE_AVAILABLE:-0}" == "1" || "${_LK_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" || "${_LK_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]
+    [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" || "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" || "${_AC_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]
 }
 
-_lk_show_cli_changelog() {
+_ac_show_cli_changelog() {
     # Display changelog for a specific kiro-cli version from feed.json.
     # Called after update to show what changed. Works on Linux, Windows (Git Bash), and macOS.
     local target_version="${1:-}"
@@ -2738,7 +2745,7 @@ _lk_show_cli_changelog() {
 
     # Resolve feed.json path using platform-aware data dir helper
     local data_dir
-    data_dir=$(_lk_kiro_data_dir) || return 0
+    data_dir=$(_ac_kiro_cli_data_dir) || return 0
     feed_file="${data_dir}/feed.json"
 
     [[ -f "$feed_file" ]] || return 0
@@ -2802,9 +2809,9 @@ _lk_show_cli_changelog() {
 # header advertised the new version while every function in memory was still
 # the old code, and the pull failed confusingly on a dirty tree or a different
 # branch.
-_lk_update_launcher() {
+_ac_update_launcher() {
     local reset=$'\e[0m' c_dim=$'\e[2m' c_warn=$'\e[1;33m' c_err=$'\e[31m' c_ok=$'\e[1;32m'
-    local dir="$_LK_SCRIPT_DIR"
+    local dir="$_AC_SCRIPT_DIR"
 
     if [[ ! -d "$dir/.git" ]]; then
         printf "  %s✗ %s is not a git checkout — update manually%s\n" "$c_err" "$dir" "$reset"
@@ -2824,28 +2831,28 @@ _lk_update_launcher() {
         return 1
     fi
 
-    _lk_spin_verbose "Updating kiro-launcher..." \
+    _ac_spin_verbose "Updating anycli..." \
         git -C "$dir" pull --ff-only origin main || return 1
 
-    _LK_VERSION="$(cat "$dir/VERSION" 2>/dev/null || echo "dev")"
-    unset _LK_CLI_VERSION_CACHED
+    _AC_VERSION="$(cat "$dir/VERSION" 2>/dev/null || echo "dev")"
+    unset _AC_CLI_VERSION_CACHED
 
     # Reload the new definitions so the running shell actually gets the update.
     # Parse first: sourcing a broken file would break the caller's shell.
-    local src="$dir/kiro-launcher.bash"
+    local src="$dir/anycli.bash"
     if [[ -f "$src" ]] && bash -n "$src" 2>/dev/null; then
         # shellcheck source=/dev/null
         source "$src"
-        printf "  %s✓ Reloaded v%s into this shell%s\n" "$c_ok" "$_LK_VERSION" "$reset"
+        printf "  %s✓ Reloaded v%s into this shell%s\n" "$c_ok" "$_AC_VERSION" "$reset"
     else
-        printf "  %s! Updated to v%s but the new file did not parse%s\n" "$c_warn" "$_LK_VERSION" "$reset"
+        printf "  %s! Updated to v%s but the new file did not parse%s\n" "$c_warn" "$_AC_VERSION" "$reset"
         printf "    %sOpen a new terminal, or run: source %s%s\n" "$c_dim" "$src" "$reset"
     fi
     return 0
 }
 
-_lk_do_update() {
-    _lk_clear
+_ac_do_update() {
+    _ac_clear
     local reset=$'\e[0m'
     local c_title=$'\e[1;36m'
     local c_dim=$'\e[2m'
@@ -2859,23 +2866,23 @@ _lk_do_update() {
     local has_core_update=0
 
     # --- Core updates (kiro-cli + launcher) — auto-applied on confirm ---
-    if [[ "${_LK_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+    if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
         has_core_update=1
         printf "  %s⬆  kiro-cli%s" "$c_warn" "$reset"
-        if [[ -n "$_LK_CLI_LATEST_VERSION" ]]; then
-            printf "  %s→ %s%s" "$c_name" "$_LK_CLI_LATEST_VERSION" "$reset"
+        if [[ -n "$_AC_CLI_LATEST_VERSION" ]]; then
+            printf "  %s→ %s%s" "$c_name" "$_AC_CLI_LATEST_VERSION" "$reset"
         fi
         local current_ver
         current_ver=$(kiro-cli --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
         printf "  %s(current: %s)%s\n" "$c_dim" "$current_ver" "$reset"
     fi
 
-    if [[ "${_LK_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+    if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
         has_core_update=1
-        printf "  %s⬆  kiro-launcher%s  %s(%s commit%s behind)%s\n" \
+        printf "  %s⬆  anycli%s  %s(%s commit%s behind)%s\n" \
             "$c_warn" "$reset" "$c_dim" \
-            "$_LK_LAUNCHER_COMMITS_BEHIND" \
-            "$( (( _LK_LAUNCHER_COMMITS_BEHIND > 1 )) && echo "s" || echo "")" \
+            "$_AC_LAUNCHER_COMMITS_BEHIND" \
+            "$( (( _AC_LAUNCHER_COMMITS_BEHIND > 1 )) && echo "s" || echo "")" \
             "$reset"
     fi
 
@@ -2885,46 +2892,46 @@ _lk_do_update() {
         read -r confirm
         if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
             printf "\n"
-            if [[ "${_LK_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                _lk_spin_verbose "Updating kiro-cli..." kiro-cli update
+            if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+                _ac_spin_verbose "Updating kiro-cli..." kiro-cli update
                 # The header caches the CLI version for the shell's lifetime,
                 # so it must be invalidated or it keeps showing the old one.
-                unset _LK_CLI_VERSION_CACHED
+                unset _AC_CLI_VERSION_CACHED
                 printf "\n"
                 # Show changelog for the newly installed version
-                _lk_show_cli_changelog "$_LK_CLI_LATEST_VERSION"
+                _ac_show_cli_changelog "$_AC_CLI_LATEST_VERSION"
             fi
-            if [[ "${_LK_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                _lk_update_launcher || true
+            if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+                _ac_update_launcher || true
                 printf "\n"
             fi
-            _LK_CLI_UPDATE_AVAILABLE=0
-            _LK_LAUNCHER_UPDATE_AVAILABLE=0
+            _AC_CLI_UPDATE_AVAILABLE=0
+            _AC_LAUNCHER_UPDATE_AVAILABLE=0
         fi
     fi
 
     # --- Tracked apps — manual selection with changelogs ---
-    if [[ "${_LK_APPS_UPDATE_AVAILABLE:-0}" == "1" && -n "$_LK_APPS_UPDATE_LIST" ]]; then
+    if [[ "${_AC_APPS_UPDATE_AVAILABLE:-0}" == "1" && -n "$_AC_APPS_UPDATE_LIST" ]]; then
         printf "  %s──  App Updates  ─────────────────────%s\n\n" "$c_title" "$reset"
 
         # Build numbered list of apps with updates
         local -a _update_apps=()
         local app_name app_path
-        for app_name in "${_LK_TRACKED_APP_NAMES[@]+"${_LK_TRACKED_APP_NAMES[@]}"}"; do
-            if [[ " $_LK_APPS_UPDATE_LIST " == *" $app_name "* ]]; then
+        for app_name in "${_AC_TRACKED_APP_NAMES[@]+"${_AC_TRACKED_APP_NAMES[@]}"}"; do
+            if [[ " $_AC_APPS_UPDATE_LIST " == *" $app_name "* ]]; then
                 _update_apps+=("$app_name")
             fi
         done
 
         local ai=1
         for app_name in "${_update_apps[@]+"${_update_apps[@]}"}"; do
-            app_path="$(_lk_app_field "$app_name" path)"
+            app_path="$(_ac_app_field "$app_name" path)"
 
             local cur_ver new_ver="" ver_file ver_pat
-            cur_ver=$(_lk_app_version "$app_name")
-            ver_file="$(_lk_app_field "$app_name" version_file)"
-            ver_pat="$(_lk_app_field "$app_name" version_pattern)"
-            [[ -n "$ver_pat" ]] || ver_pat="$_LK_DEFAULT_VERSION_PATTERN"
+            cur_ver=$(_ac_app_version "$app_name")
+            ver_file="$(_ac_app_field "$app_name" version_file)"
+            ver_pat="$(_ac_app_field "$app_name" version_pattern)"
+            [[ -n "$ver_pat" ]] || ver_pat="$_AC_DEFAULT_VERSION_PATTERN"
 
             # Get incoming version from origin using the configured version file
             local default_branch
@@ -2987,37 +2994,37 @@ _lk_do_update() {
         # Apply updates for selected apps
         printf "\n"
         for app_name in "${_apps_to_update[@]+"${_apps_to_update[@]}"}"; do
-            app_path="$(_lk_app_field "$app_name" path)"
+            app_path="$(_ac_app_field "$app_name" path)"
 
             printf "  Updating %s...\n" "$app_name"
             local default_branch
             default_branch=$(git -C "$app_path" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@') || true
             [[ -z "$default_branch" ]] && default_branch="main"
-            _lk_spin_verbose "Pulling $app_name..." git -C "$app_path" pull origin "$default_branch"
+            _ac_spin_verbose "Pulling $app_name..." git -C "$app_path" pull origin "$default_branch"
             local new_ver
-            new_ver=$(_lk_app_version "$app_name")
+            new_ver=$(_ac_app_version "$app_name")
             if [[ -n "$new_ver" ]]; then
                 printf "  %s(v%s)%s\n" "$c_dim" "$new_ver" "$reset"
             fi
             printf "\n"
 
             # Remove from update list
-            _LK_APPS_UPDATE_LIST="${_LK_APPS_UPDATE_LIST//$app_name/}"
-            _LK_APPS_UPDATE_LIST="${_LK_APPS_UPDATE_LIST## }"
-            _LK_APPS_UPDATE_LIST="${_LK_APPS_UPDATE_LIST%% }"
+            _AC_APPS_UPDATE_LIST="${_AC_APPS_UPDATE_LIST//$app_name/}"
+            _AC_APPS_UPDATE_LIST="${_AC_APPS_UPDATE_LIST## }"
+            _AC_APPS_UPDATE_LIST="${_AC_APPS_UPDATE_LIST%% }"
         done
 
         # Update apps state
-        if [[ -z "${_LK_APPS_UPDATE_LIST// /}" ]]; then
-            _LK_APPS_UPDATE_AVAILABLE=0
-            _LK_APPS_UPDATE_LIST=""
+        if [[ -z "${_AC_APPS_UPDATE_LIST// /}" ]]; then
+            _AC_APPS_UPDATE_AVAILABLE=0
+            _AC_APPS_UPDATE_LIST=""
         fi
     elif [[ "$has_core_update" == "0" ]]; then
         printf "  %sEverything is up to date.%s\n" "$c_dim" "$reset"
     fi
 
     # Clear the cache so next check is fresh
-    rm -f "$_LK_UPDATE_CACHE"
+    rm -f "$_AC_UPDATE_CACHE"
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
     read -r -n 1
@@ -3027,13 +3034,13 @@ _lk_do_update() {
 #
 # Records how often and how recently each project was launched, so the menu can
 # float what you actually use to the top and so tooling can see usage.
-_LK_RECENT_FILE="${HOME}/.config/kiro-launcher/.recent"
-_LK_RECENT_MAX_ENTRIES=200
+_AC_RECENT_FILE="${HOME}/.config/anycli/.recent"
+_AC_RECENT_MAX_ENTRIES=200
 
 # Read one field of a project's history. field is "count" or "ts".
-_lk_recent_field() {
+_ac_recent_field() {
     local name="${1:-}" field="${2:-ts}" n c t
-    [[ -f "$_LK_RECENT_FILE" ]] || { printf '0'; return 0; }
+    [[ -f "$_AC_RECENT_FILE" ]] || { printf '0'; return 0; }
     while IFS=$'\t' read -r n c t || [[ -n "$n" ]]; do
         if [[ "$n" == "$name" ]]; then
             case "$field" in
@@ -3042,18 +3049,18 @@ _lk_recent_field() {
             esac
             return 0
         fi
-    done < "$_LK_RECENT_FILE"
+    done < "$_AC_RECENT_FILE"
     printf '0'
     return 0
 }
 
 # Note that a project was just launched.
-_lk_record_launch() {
+_ac_record_launch() {
     local name="${1:-}"
     [[ -n "$name" ]] || return 0
 
     local dir
-    dir="$(dirname "$_LK_RECENT_FILE")"
+    dir="$(dirname "$_AC_RECENT_FILE")"
     mkdir -p "$dir" 2>/dev/null || return 0
 
     local tmp
@@ -3061,7 +3068,7 @@ _lk_record_launch() {
 
     local count=0 n c t now
     now=$(date +%s)
-    if [[ -f "$_LK_RECENT_FILE" ]]; then
+    if [[ -f "$_AC_RECENT_FILE" ]]; then
         {
             while IFS=$'\t' read -r n c t || [[ -n "$n" ]]; do
                 [[ -z "$n" ]] && continue
@@ -3070,41 +3077,41 @@ _lk_record_launch() {
                 else
                     printf '%s\t%s\t%s\n' "$n" "$c" "$t"
                 fi
-            done < "$_LK_RECENT_FILE"
+            done < "$_AC_RECENT_FILE"
         } > "$tmp"
     fi
     printf '%s\t%s\t%s\n' "$name" "$(( count + 1 ))" "$now" >> "$tmp"
 
     # Keep the file bounded: newest entries win
-    if (( $(wc -l < "$tmp") > _LK_RECENT_MAX_ENTRIES )); then
+    if (( $(wc -l < "$tmp") > _AC_RECENT_MAX_ENTRIES )); then
         local pruned
         pruned="$(mktemp "${dir}/.recent.XXXXXX" 2>/dev/null)" || pruned=""
         if [[ -n "$pruned" ]]; then
-            sort -t$'\t' -k3,3nr "$tmp" | head -n "$_LK_RECENT_MAX_ENTRIES" > "$pruned"
+            sort -t$'\t' -k3,3nr "$tmp" | head -n "$_AC_RECENT_MAX_ENTRIES" > "$pruned"
             mv "$pruned" "$tmp" 2>/dev/null || rm -f "$pruned"
         fi
     fi
 
-    mv "$tmp" "$_LK_RECENT_FILE" 2>/dev/null || rm -f "$tmp"
+    mv "$tmp" "$_AC_RECENT_FILE" 2>/dev/null || rm -f "$tmp"
     return 0
 }
 
-# Reorder _LK_PROJECT_DIRS most-recently-launched first. Projects that have
+# Reorder _AC_PROJECT_DIRS most-recently-launched first. Projects that have
 # never been launched keep their alphabetical order at the end.
-_lk_sort_projects_by_recent() {
-    (( ${#_LK_PROJECT_DIRS[@]} > 1 )) || return 0
+_ac_sort_projects_by_recent() {
+    (( ${#_AC_PROJECT_DIRS[@]} > 1 )) || return 0
     local dir base ts
     local -a sorted=()
     while IFS= read -r line; do
         [[ -n "$line" ]] && sorted+=("${line#*$'\t'}")
     done < <(
-        for dir in "${_LK_PROJECT_DIRS[@]}"; do
+        for dir in "${_AC_PROJECT_DIRS[@]}"; do
             base="$(basename "$dir")"
-            ts="$(_lk_recent_field "$base" ts)"
+            ts="$(_ac_recent_field "$base" ts)"
             printf '%020d\t%s\n' "$ts" "$dir"
         done | sort -t$'\t' -k1,1nr -k2,2
     )
-    (( ${#sorted[@]} > 0 )) && _LK_PROJECT_DIRS=("${sorted[@]}")
+    (( ${#sorted[@]} > 0 )) && _AC_PROJECT_DIRS=("${sorted[@]}")
     return 0
 }
 
@@ -3112,7 +3119,7 @@ _lk_sort_projects_by_recent() {
 #
 # Opt-in via show_git_status: true. Off by default because it costs two git
 # invocations per project on every render.
-_lk_git_summary() {
+_ac_git_summary() {
     local dir="${1:-}"
     [[ -n "$dir" && -d "$dir/.git" ]] || return 0
 
@@ -3145,7 +3152,7 @@ _lk_git_summary() {
 # Convert an ISO8601 timestamp (e.g. 2026-09-04T13:19:09.305Z) to epoch seconds.
 # Portable across GNU date (Linux, WSL, Git Bash coreutils) and BSD/macOS date.
 # Prints the epoch or nothing on failure.
-_lk_iso_to_epoch() {
+_ac_iso_to_epoch() {
     local iso="${1:-}"
     [[ -n "$iso" ]] || return 0
     local epoch
@@ -3166,12 +3173,12 @@ _lk_iso_to_epoch() {
 # or the lookup fails. Best-effort: a parse miss degrades to empty rather than
 # corrupting the menu. Cross-platform: works on Linux, WSL2, macOS, and Git Bash
 # (guards the absence of `timeout` and handles both GNU and BSD `date`).
-_lk_session_summary() {
+_ac_session_summary() {
     local dir="${1:-}"
     [[ -n "$dir" && -d "$dir" ]] || return 0
 
     local list_argv
-    list_argv="$(_lk_cli_list_argv "$_LK_CLI_TOOL")"
+    list_argv="$(_ac_cli_list_argv "$_AC_CLI_TOOL")"
     [[ -n "$list_argv" ]] || return 0
 
     # Fetch JSON with a hard timeout when available; fall back to a plain call on
@@ -3186,9 +3193,9 @@ _lk_session_summary() {
     fi
     local json
     if command -v timeout >/dev/null 2>&1; then
-        json="$(timeout 3 bash -c 'cd "$1" 2>/dev/null && shift && "$@"' _ "$dir" "$_LK_CLI_TOOL" "${largv[@]}" 2>/dev/null)" || return 0
+        json="$(timeout 3 bash -c 'cd "$1" 2>/dev/null && shift && "$@"' _ "$dir" "$_AC_CLI_TOOL" "${largv[@]}" 2>/dev/null)" || return 0
     else
-        json="$(bash -c 'cd "$1" 2>/dev/null && shift && "$@"' _ "$dir" "$_LK_CLI_TOOL" "${largv[@]}" 2>/dev/null)" || return 0
+        json="$(bash -c 'cd "$1" 2>/dev/null && shift && "$@"' _ "$dir" "$_AC_CLI_TOOL" "${largv[@]}" 2>/dev/null)" || return 0
     fi
     [[ -n "$json" ]] || return 0
 
@@ -3230,7 +3237,7 @@ _lk_session_summary() {
     [[ -z "$iso" ]] && return 0
 
     local epoch
-    epoch="$(_lk_iso_to_epoch "$iso")"
+    epoch="$(_ac_iso_to_epoch "$iso")"
     [[ -z "$epoch" ]] && return 0
 
     printf '%s\t%s' "$title" "$epoch"
@@ -3240,33 +3247,33 @@ _lk_session_summary() {
 # In-invocation cache of session summaries, keyed by safe directory name. The
 # value is "title<TAB>epoch", or the sentinel "\0none" when a lookup returned
 # nothing (so a session-less project is not re-queried on every re-render).
-# Declared here; populated lazily by _lk_session_cached only when show_sessions
+# Declared here; populated lazily by _ac_session_cached only when show_sessions
 # is on. Never populated when the toggle is off — zero CLI spawns in that case.
-declare -gA _LK_SESSION_CACHE 2>/dev/null || declare -A _LK_SESSION_CACHE
+declare -gA _AC_SESSION_CACHE 2>/dev/null || declare -A _AC_SESSION_CACHE
 
 # Return the cached session summary for a directory, computing it once on first
 # request. Prints "title<TAB>epoch" or nothing.
-_lk_session_cached() {
+_ac_session_cached() {
     local dir="${1:-}" safe
     [[ -n "$dir" ]] || return 0
-    safe="$(_lk_safe_name "$(basename "$dir")")"
-    if [[ -z "${_LK_SESSION_CACHE[$safe]+set}" ]]; then
+    safe="$(_ac_safe_name "$(basename "$dir")")"
+    if [[ -z "${_AC_SESSION_CACHE[$safe]+set}" ]]; then
         local summary
-        summary="$(_lk_session_summary "$dir")"
+        summary="$(_ac_session_summary "$dir")"
         if [[ -n "$summary" ]]; then
-            _LK_SESSION_CACHE[$safe]="$summary"
+            _AC_SESSION_CACHE[$safe]="$summary"
         else
-            _LK_SESSION_CACHE[$safe]=$'\0none'
+            _AC_SESSION_CACHE[$safe]=$'\0none'
         fi
     fi
-    local cached="${_LK_SESSION_CACHE[$safe]}"
+    local cached="${_AC_SESSION_CACHE[$safe]}"
     [[ "$cached" == $'\0none' ]] && return 0
     printf '%s' "$cached"
     return 0
 }
 
 # Compact relative age for an epoch timestamp, e.g. "2h", "3d", "just now".
-_lk_relative_age() {
+_ac_relative_age() {
     local epoch="${1:-}"
     [[ "$epoch" =~ ^[0-9]+$ ]] || return 0
     local now delta
@@ -3285,17 +3292,17 @@ _lk_relative_age() {
 # Format the session suffix shown in a menu row: a marker, the (truncated)
 # last-session title, and its relative age. Prints nothing when there is no
 # session. Title is truncated to 32 chars so it does not push the row too wide.
-_lk_session_suffix() {
+_ac_session_suffix() {
     local dir="${1:-}"
     local summary title epoch age
-    summary="$(_lk_session_cached "$dir")"
+    summary="$(_ac_session_cached "$dir")"
     [[ -n "$summary" ]] || return 0
     title="${summary%%$'\t'*}"
     epoch="${summary##*$'\t'}"
     if (( ${#title} > 32 )); then
         title="${title:0:31}…"
     fi
-    age="$(_lk_relative_age "$epoch")"
+    age="$(_ac_relative_age "$epoch")"
     if [[ -n "$title" && -n "$age" ]]; then
         printf '⏵ "%s" · %s' "$title" "$age"
     elif [[ -n "$age" ]]; then
@@ -3310,34 +3317,34 @@ _lk_session_suffix() {
 
 # Every directory that is scanned for projects: the configured root plus any
 # extra_dirs.
-_lk_project_roots() {
-    _LK_PROJECT_ROOTS=("$_LK_PROJECTS_DIR")
+_ac_project_roots() {
+    _AC_PROJECT_ROOTS=("$_AC_PROJECTS_DIR")
     local extra
-    for extra in "${_LK_EXTRA_DIRS[@]+"${_LK_EXTRA_DIRS[@]}"}"; do
-        [[ -n "$extra" ]] && _LK_PROJECT_ROOTS+=("$extra")
+    for extra in "${_AC_EXTRA_DIRS[@]+"${_AC_EXTRA_DIRS[@]}"}"; do
+        [[ -n "$extra" ]] && _AC_PROJECT_ROOTS+=("$extra")
     done
     return 0
 }
 
 # True when the path is one of the scanned roots.
-_lk_is_project_root() {
+_ac_is_project_root() {
     local candidate="${1:-}" root
-    for root in "${_LK_PROJECT_ROOTS[@]+"${_LK_PROJECT_ROOTS[@]}"}"; do
+    for root in "${_AC_PROJECT_ROOTS[@]+"${_AC_PROJECT_ROOTS[@]}"}"; do
         [[ "${root%/}" == "${candidate%/}" ]] && return 0
     done
     return 1
 }
 
-# Populate the global _LK_PROJECT_DIRS with every project directory to offer.
-_lk_collect_projects() {
-    _LK_PROJECT_DIRS=()
-    _lk_project_roots
+# Populate the global _AC_PROJECT_DIRS with every project directory to offer.
+_ac_collect_projects() {
+    _AC_PROJECT_DIRS=()
+    _ac_project_roots
 
-    local depth="${_LK_SCAN_DEPTH:-1}"
+    local depth="${_AC_SCAN_DEPTH:-1}"
     local root dir child
     local -a kids
 
-    for root in "${_LK_PROJECT_ROOTS[@]}"; do
+    for root in "${_AC_PROJECT_ROOTS[@]}"; do
         [[ -n "$root" && -d "$root" ]] || continue
         for dir in "$root"/*/; do
             [[ -d "$dir" ]] || continue
@@ -3354,19 +3361,19 @@ _lk_collect_projects() {
                     kids+=("${child%/}")
                 done
                 if (( ${#kids[@]} > 0 )); then
-                    _LK_PROJECT_DIRS+=("${kids[@]}")
+                    _AC_PROJECT_DIRS+=("${kids[@]}")
                     continue
                 fi
             fi
 
-            _LK_PROJECT_DIRS+=("$dir")
+            _AC_PROJECT_DIRS+=("$dir")
         done
     done
 
     # Alphabetical by default (glob order); opt in to recency with
     # sort_order: recent
-    if [[ "${_LK_SORT_ORDER:-name}" == "recent" ]]; then
-        _lk_sort_projects_by_recent
+    if [[ "${_AC_SORT_ORDER:-name}" == "recent" ]]; then
+        _ac_sort_projects_by_recent
     fi
     return 0
 }
@@ -3374,7 +3381,7 @@ _lk_collect_projects() {
 # Resolve the configured alias for a project directory name.
 #
 # Fast path: exact safe-name key (the modern, correct storage form).
-# Fallback: scan every _LK_PROJECT_ALIAS_* variable, decode its suffix back to
+# Fallback: scan every _AC_PROJECT_ALIAS_* variable, decode its suffix back to
 # a project name, and match in two collision-safe stages:
 #   1. exact, case-insensitive (a key that differs only by letter case)
 #   2. the precise legacy-bug shape: the requested name with hyphens replaced
@@ -3384,13 +3391,13 @@ _lk_collect_projects() {
 # Because the match is one-directional (hyphen dir → underscore key), a genuine
 # "my_app" directory will NOT falsely pick up an alias set for a distinct
 # "my-app" directory. Prints the alias and returns 0 when found, 1 otherwise.
-_lk_lookup_alias() {
+_ac_lookup_alias() {
     local name="${1:-}" safe val varname p decoded
     [[ -z "$name" ]] && return 1
 
     # Fast path: exact encoded key.
-    safe="$(_lk_safe_name "$name")"
-    val="$(_lk_indirect "_LK_PROJECT_ALIAS_${safe}")"
+    safe="$(_ac_safe_name "$name")"
+    val="$(_ac_indirect "_AC_PROJECT_ALIAS_${safe}")"
     if [[ -n "$val" ]]; then
         printf '%s' "$val"
         return 0
@@ -3399,24 +3406,24 @@ _lk_lookup_alias() {
     # Fallback only runs when the fast path missed. Capture the alias var list
     # once; if no aliases are configured, skip the fallback setup entirely.
     local -a alias_vars=()
-    local _lk_av
-    while IFS= read -r _lk_av; do
-        [[ -n "$_lk_av" ]] && alias_vars+=("$_lk_av")
-    done < <(_lk_vars_with_prefix _LK_PROJECT_ALIAS_)
+    local _ac_av
+    while IFS= read -r _ac_av; do
+        [[ -n "$_ac_av" ]] && alias_vars+=("$_ac_av")
+    done < <(_ac_vars_with_prefix _AC_PROJECT_ALIAS_)
     (( ${#alias_vars[@]} == 0 )) && return 1
 
-    local name_lower="$(_lk_lower "$name")"
+    local name_lower="$(_ac_lower "$name")"
     # The legacy key form: this name with every hyphen turned into an underscore.
     local legacy="${name//-/_}"
     for varname in "${alias_vars[@]}"; do
-        p="${varname#_LK_PROJECT_ALIAS_}"
-        decoded="$(_lk_project_name "$p")"
+        p="${varname#_AC_PROJECT_ALIAS_}"
+        decoded="$(_ac_project_name "$p")"
         # Stage 1: exact, case-insensitive.
         # Stage 2: legacy hyphen->underscore shape (only when the name actually
         # contains a hyphen, so identical names don't self-trigger).
-        if [[ "$(_lk_lower "$decoded")" == "$name_lower" ]] \
+        if [[ "$(_ac_lower "$decoded")" == "$name_lower" ]] \
            || { [[ "$name" == *-* ]] && [[ "$decoded" == "$legacy" ]]; }; then
-            val="$(_lk_indirect "$varname")"
+            val="$(_ac_indirect "$varname")"
             if [[ -n "$val" ]]; then
                 printf '%s' "$val"
                 return 0
@@ -3431,16 +3438,16 @@ _lk_lookup_alias() {
 # A configured alias always wins. Otherwise the directory name is used, except
 # for a project nested under a grouping folder, where the group is included so
 # that work/api and personal/api stay distinguishable.
-_lk_project_label() {
+_ac_project_label() {
     local dir="${1:-}" base parent alias_val
     base="$(basename "$dir")"
-    alias_val="$(_lk_lookup_alias "$base")"
+    alias_val="$(_ac_lookup_alias "$base")"
     if [[ -n "$alias_val" ]]; then
         printf '%s' "$alias_val"
         return 0
     fi
     parent="$(dirname "$dir")"
-    if _lk_is_project_root "$parent"; then
+    if _ac_is_project_root "$parent"; then
         printf '%s' "$base"
     else
         printf '%s/%s' "$(basename "$parent")" "$base"
@@ -3450,9 +3457,9 @@ _lk_project_label() {
 
 # The name shown in the menu: the configured alias if there is one, else the
 # directory name.
-_lk_display_name() {
+_ac_display_name() {
     local dirname="${1:-}" alias_val
-    alias_val="$(_lk_lookup_alias "$dirname")"
+    alias_val="$(_ac_lookup_alias "$dirname")"
     printf '%s' "${alias_val:-$dirname}"
 }
 
@@ -3462,28 +3469,28 @@ _lk_display_name() {
 # case-insensitive prefix, then case-insensitive substring. Both the directory
 # name and the configured alias are considered.
 #
-# On success sets _LK_RESOLVED_DIR and returns 0.
+# On success sets _AC_RESOLVED_DIR and returns 0.
 # Returns 1 when nothing matched, 2 when the query is ambiguous (candidates are
-# left in _LK_RESOLVED_MATCHES).
-_lk_resolve_project() {
+# left in _AC_RESOLVED_MATCHES).
+_ac_resolve_project() {
     local query="${1:-}"
-    _LK_RESOLVED_DIR=""
-    _LK_RESOLVED_MATCHES=()
+    _AC_RESOLVED_DIR=""
+    _AC_RESOLVED_MATCHES=()
     [[ -n "$query" ]] || return 1
 
-    _lk_collect_projects
+    _ac_collect_projects
     local -a exact=() ci_exact=() prefix=() substr=()
     local dir base disp q_lower b_lower d_lower
-    q_lower="$(_lk_lower "$query")"
+    q_lower="$(_ac_lower "$query")"
 
     local label l_lower
-    for dir in "${_LK_PROJECT_DIRS[@]+"${_LK_PROJECT_DIRS[@]}"}"; do
+    for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
         base="$(basename "$dir")"
-        disp="$(_lk_display_name "$base")"
-        label="$(_lk_project_label "$dir")"
-        b_lower="$(_lk_lower "$base")"
-        d_lower="$(_lk_lower "$disp")"
-        l_lower="$(_lk_lower "$label")"
+        disp="$(_ac_display_name "$base")"
+        label="$(_ac_project_label "$dir")"
+        b_lower="$(_ac_lower "$base")"
+        d_lower="$(_ac_lower "$disp")"
+        l_lower="$(_ac_lower "$label")"
 
         if [[ "$base" == "$query" || "$disp" == "$query" || "$label" == "$query" ]]; then
             exact+=("$dir")
@@ -3504,57 +3511,57 @@ _lk_resolve_project() {
     fi
 
     case ${#matches[@]} in
-        1) _LK_RESOLVED_DIR="${matches[0]}"; return 0 ;;
+        1) _AC_RESOLVED_DIR="${matches[0]}"; return 0 ;;
         0) return 1 ;;
-        *) _LK_RESOLVED_MATCHES=("${matches[@]}"); return 2 ;;
+        *) _AC_RESOLVED_MATCHES=("${matches[@]}"); return 2 ;;
     esac
 }
 
 # True when a project directory or alias matches the name exactly. Used so that
 # a project called "doctor" or "config" still wins over the subcommand.
-_lk_project_exists_exact() {
+_ac_project_exists_exact() {
     local query="${1:-}" dir base
-    _lk_collect_projects
-    for dir in "${_LK_PROJECT_DIRS[@]+"${_LK_PROJECT_DIRS[@]}"}"; do
+    _ac_collect_projects
+    for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
         base="$(basename "$dir")"
-        if [[ "$base" == "$query" || "$(_lk_display_name "$base")" == "$query" ]]; then
+        if [[ "$base" == "$query" || "$(_ac_display_name "$base")" == "$query" ]]; then
             return 0
         fi
     done
     return 1
 }
 
-_lk_usage() {
-    printf 'kiro-launcher %s — launch your AI CLI in a project directory\n\n' "$_LK_VERSION"
+_ac_usage() {
+    printf 'anycli %s — launch your AI CLI in a project directory\n\n' "$_AC_VERSION"
     printf 'Usage:\n'
-    printf '  lk                    open the interactive menu\n'
-    printf '  lk <name>             launch directly in the matching project\n'
-    printf '  lk resume <name>      resume the project'"'"'s most recent session\n'
-    printf '  lk <name> --resume    same as above (also -r)\n'
-    printf '  lk pick <name>        pick a session to resume (interactive)\n'
-    printf '  lk <name> --resume-picker  same as above\n'
-    printf '  lk list               list projects (one per line)\n'
-    printf '  lk config             open the configuration menu\n'
-    printf '  lk setup              re-run guided setup (keeps existing values)\n'
-    printf '  lk doctor             run a setup/dependency health check\n'
-    printf '  lk help               show this help\n'
-    printf '  lk version            print the version\n\n'
+    printf '  ac                    open the interactive menu\n'
+    printf '  ac <name>             launch directly in the matching project\n'
+    printf '  ac resume <name>      resume the project'"'"'s most recent session\n'
+    printf '  ac <name> --resume    same as above (also -r)\n'
+    printf '  ac pick <name>        pick a session to resume (interactive)\n'
+    printf '  ac <name> --resume-picker  same as above\n'
+    printf '  ac list               list projects (one per line)\n'
+    printf '  ac config             open the configuration menu\n'
+    printf '  ac setup              re-run guided setup (keeps existing values)\n'
+    printf '  ac doctor             run a setup/dependency health check\n'
+    printf '  ac help               show this help\n'
+    printf '  ac version            print the version\n\n'
     printf 'Options:\n'
     printf '  -r, --resume          resume the most recent session for <name>\n'
     printf '  --resume-picker       pick a session to resume for <name>\n'
-    printf '  -h, --help            same as "lk help"\n'
-    printf '  -V, --version         same as "lk version"\n'
-    printf '  -l, --list            same as "lk list"\n\n'
+    printf '  -h, --help            same as "ac help"\n'
+    printf '  -V, --version         same as "ac version"\n'
+    printf '  -l, --list            same as "ac list"\n\n'
     printf '<name> matches a directory name or a configured alias, trying exact,\n'
     printf 'case-insensitive, prefix, then substring. A project whose name is also a\n'
     printf 'subcommand takes precedence over the subcommand.\n\n'
-    printf 'Configuration: %s\n' "$_LK_CONFIG_FILE"
+    printf 'Configuration: %s\n' "$_AC_CONFIG_FILE"
     return 0
 }
 
 # First-run guided setup (issue #14).
 #
-# Runs the very first time `lk` is invoked with no config file yet, turning the
+# Runs the very first time `ac` is invoked with no config file yet, turning the
 # bare "projects directory not found" error into a short guided setup: pick a
 # projects root (from auto-detected candidates), pick an AI CLI (from tools
 # found on PATH), and optionally set default flags. It writes the config and
@@ -3562,17 +3569,17 @@ _lk_usage() {
 #
 # The caller is responsible for the trigger gate (no config file + interactive
 # TTY). Returns 0 when a config was written, 1 when the user aborted.
-_lk_first_run_wizard() {
-    # Establish all _LK_* defaults first. With no config file present this is a
-    # cheap no-op that just seeds defaults, and it guarantees _lk_write_config
+_ac_first_run_wizard() {
+    # Establish all _AC_* defaults first. With no config file present this is a
+    # cheap no-op that just seeds defaults, and it guarantees _ac_write_config
     # has every variable it references (important under `set -u`).
-    _lk_load_config
+    _ac_load_config
 
     local reset=$'\e[0m' c_title=$'\e[1;36m' c_num=$'\e[1;33m'
     local c_name=$'\e[0;37m' c_dim=$'\e[2m' c_prompt=$'\e[1;32m' c_ok=$'\e[32m'
 
     printf '\n'
-    printf "  %s──  Welcome to Kiro Launcher  ────────%s\n\n" "$c_title" "$reset"
+    printf "  %s──  Welcome to anycli  ────────%s\n\n" "$c_title" "$reset"
     printf "  %sNo config yet — let's set it up. Three quick questions.%s\n" "$c_dim" "$reset"
 
     # --- Question 1: projects root -----------------------------------------
@@ -3661,7 +3668,7 @@ _lk_first_run_wizard() {
 
     # --- Question 2: AI CLI tool -------------------------------------------
     local detected
-    detected="$(_lk_detect_clis)"
+    detected="$(_ac_detect_clis)"
     local -a clis=()
     read -r -a clis <<< "$detected"
 
@@ -3684,8 +3691,13 @@ _lk_first_run_wizard() {
         fi
     else
         printf "     %sNo known AI CLI found on PATH.%s\n" "$c_dim" "$reset"
-        printf "     %sDefaulting to 'kiro-cli' — install it or change this later via 'lk' → 'c'.%s\n" "$c_dim" "$reset"
-        chosen_cli="kiro-cli"
+        printf "     %sEnter the command to run (e.g. claude, aider):%s\n" "$c_dim" "$reset"
+        printf "  %s›%s " "$c_prompt" "$reset"
+        read -r chosen_cli || return 1
+        if [[ -z "$chosen_cli" ]]; then
+            printf "  %sSetup cancelled — no CLI tool given.%s\n" "$c_dim" "$reset"
+            return 1
+        fi
     fi
 
     # --- Question 3: default flags (optional) ------------------------------
@@ -3696,44 +3708,44 @@ _lk_first_run_wizard() {
     read -r flags || return 1
 
     # --- Persist -----------------------------------------------------------
-    _LK_PROJECTS_DIR="$chosen_root"
-    _LK_CLI_TOOL="$chosen_cli"
-    _LK_CLI_LAUNCH="$(_lk_get_default_launch "$chosen_cli")"
-    _LK_KIRO_FLAGS="$flags"
-    _lk_write_config
+    _AC_PROJECTS_DIR="$chosen_root"
+    _AC_CLI_TOOL="$chosen_cli"
+    _AC_CLI_LAUNCH="$(_ac_get_default_launch "$chosen_cli")"
+    _AC_CLI_FLAGS="$flags"
+    _ac_write_config
 
-    printf "\n  %s✓ Setup complete.%s Config saved to %s\n" "$c_ok" "$reset" "$_LK_CONFIG_FILE"
-    printf "  %sYou can change any of this later with 'lk' → 'c'.%s\n\n" "$c_dim" "$reset"
+    printf "\n  %s✓ Setup complete.%s Config saved to %s\n" "$c_ok" "$reset" "$_AC_CONFIG_FILE"
+    printf "  %sYou can change any of this later with 'ac' → 'c'.%s\n\n" "$c_dim" "$reset"
     printf "  %sPress Enter to open your menu...%s" "$c_dim" "$reset"
     read -r _ || true
     return 0
 }
 
-# 'lk setup' — re-runnable guided setup (non-destructive).
+# 'ac setup' — re-runnable guided setup (non-destructive).
 #
 # Unlike the first-run wizard (which only fires when no config exists), this can
-# be invoked any time via `lk setup`. It revisits the three basics — projects
+# be invoked any time via `ac setup`. It revisits the three basics — projects
 # root, AI CLI, default flags — with the CURRENT value pre-filled as the
 # default, so pressing Enter keeps what you already have. It never touches
 # per-project configuration (flags/color/title/prompt/alias) or preferences
-# (theme, sort order, git/session toggles): _lk_load_config loads them and
-# _lk_write_config re-emits them verbatim. Returns 0 on success, 1 on abort.
-_lk_setup() {
+# (theme, sort order, git/session toggles): _ac_load_config loads them and
+# _ac_write_config re-emits them verbatim. Returns 0 on success, 1 on abort.
+_ac_setup() {
     # Load current config so pre-filled defaults reflect reality and every
     # existing value (including the projects: map) survives the rewrite.
-    _lk_load_config
+    _ac_load_config
 
     local reset=$'\e[0m' c_title=$'\e[1;36m' c_num=$'\e[1;33m'
     local c_name=$'\e[0;37m' c_dim=$'\e[2m' c_prompt=$'\e[1;32m' c_ok=$'\e[32m'
 
     printf '\n'
-    printf "  %s──  Kiro Launcher Setup  ────────%s\n\n" "$c_title" "$reset"
+    printf "  %s──  anycli Setup  ────────%s\n\n" "$c_title" "$reset"
     printf "  %sRevisit the basics. Press Enter to keep the current value.%s\n" "$c_dim" "$reset"
     printf "  %sPer-project settings and preferences are left untouched.%s\n" "$c_dim" "$reset"
 
     # --- Projects root -----------------------------------------------------
     printf "\n  %s1. Projects directory%s\n" "$c_name" "$reset"
-    printf "     %scurrent: %s%s%s\n" "$c_dim" "$c_ok" "${_LK_PROJECTS_DIR/#$HOME/\~}" "$reset"
+    printf "     %scurrent: %s%s%s\n" "$c_dim" "$c_ok" "${_AC_PROJECTS_DIR/#$HOME/\~}" "$reset"
     printf "  %s› %s(Enter to keep)%s " "$c_prompt" "$c_dim" "$reset"
     local new_root
     read -r new_root || return 1
@@ -3757,14 +3769,14 @@ _lk_setup() {
                 new_root=""
             fi
         fi
-        [[ -n "$new_root" ]] && _LK_PROJECTS_DIR="$new_root"
+        [[ -n "$new_root" ]] && _AC_PROJECTS_DIR="$new_root"
     fi
 
     # --- AI CLI tool -------------------------------------------------------
     printf "\n  %s2. AI CLI tool%s\n" "$c_name" "$reset"
-    printf "     %scurrent: %s%s %s%s\n" "$c_dim" "$c_ok" "$_LK_CLI_TOOL" "$_LK_CLI_LAUNCH" "$reset"
+    printf "     %scurrent: %s%s %s%s\n" "$c_dim" "$c_ok" "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH" "$reset"
     local detected
-    detected="$(_lk_detect_clis)"
+    detected="$(_ac_detect_clis)"
     local -a clis=()
     read -r -a clis <<< "$detected"
     if (( ${#clis[@]} > 0 )); then
@@ -3778,8 +3790,8 @@ _lk_setup() {
         local cpick
         read -r cpick || return 1
         if [[ "$cpick" =~ ^[0-9]+$ ]] && (( cpick >= 1 && cpick <= ${#clis[@]} )); then
-            _LK_CLI_TOOL="${clis[$((cpick-1))]}"
-            _LK_CLI_LAUNCH="$(_lk_get_default_launch "$_LK_CLI_TOOL")"
+            _AC_CLI_TOOL="${clis[$((cpick-1))]}"
+            _AC_CLI_LAUNCH="$(_ac_get_default_launch "$_AC_CLI_TOOL")"
         fi
     else
         printf "     %s(no known CLI detected on PATH — keeping current)%s\n" "$c_dim" "$reset"
@@ -3787,25 +3799,25 @@ _lk_setup() {
 
     # --- Default flags -----------------------------------------------------
     printf "\n  %s3. Default flags%s\n" "$c_name" "$reset"
-    printf "     %scurrent: %s%s%s\n" "$c_dim" "$c_ok" "${_LK_KIRO_FLAGS:-(none)}" "$reset"
+    printf "     %scurrent: %s%s%s\n" "$c_dim" "$c_ok" "${_AC_CLI_FLAGS:-(none)}" "$reset"
     printf "     %sEnter to keep, or type '-' to clear.%s\n" "$c_dim" "$reset"
     printf "  %s› %s " "$c_prompt" "$reset"
     local new_flags
     read -r new_flags || return 1
     if [[ "$new_flags" == "-" ]]; then
-        _LK_KIRO_FLAGS=""
+        _AC_CLI_FLAGS=""
     elif [[ -n "$new_flags" ]]; then
-        _LK_KIRO_FLAGS="$new_flags"
+        _AC_CLI_FLAGS="$new_flags"
     fi
 
-    _lk_write_config
+    _ac_write_config
 
-    printf "\n  %s✓ Setup saved.%s %s\n" "$c_ok" "$reset" "$_LK_CONFIG_FILE"
+    printf "\n  %s✓ Setup saved.%s %s\n" "$c_ok" "$reset" "$_AC_CONFIG_FILE"
     printf "  %sPer-project settings and preferences were preserved.%s\n\n" "$c_dim" "$reset"
     return 0
 }
 
-# 'lk doctor' — a first-class health report for the launcher's own
+# 'ac doctor' — a first-class health report for the launcher's own
 # configuration plus the underlying platform/dependency checks.
 #
 # It runs launcher-specific checks inline (these need the loaded config, which
@@ -3813,8 +3825,8 @@ _lk_setup() {
 # dependency checks to tests/check-platform.sh when that script is reachable
 # next to the launcher (no logic duplication). Exit status is non-zero when a
 # REQUIRED launcher check fails or the delegated platform check fails.
-_lk_doctor() {
-    _lk_load_config
+_ac_doctor() {
+    _ac_load_config
 
     local ok warn err dim rst
     if [[ -t 1 ]]; then
@@ -3826,76 +3838,76 @@ _lk_doctor() {
     local fails=0 warns=0
     # Local helper closures. Defined with plain names (bash has no truly local
     # functions); they read/modify fails/warns in the caller's scope.
-    _lk_doctor_pass() { printf '  %s✓%s %s\n' "$ok" "$rst" "$1"; }
-    _lk_doctor_warn() { printf '  %s!%s %s%s%s\n' "$warn" "$rst" "$1" "${2:+ — }" "${2:-}"; warns=$((warns+1)); }
-    _lk_doctor_fail() { printf '  %s✗%s %s%s%s\n' "$err" "$rst" "$1" "${2:+ — }" "${2:-}"; fails=$((fails+1)); }
+    _ac_doctor_pass() { printf '  %s✓%s %s\n' "$ok" "$rst" "$1"; }
+    _ac_doctor_warn() { printf '  %s!%s %s%s%s\n' "$warn" "$rst" "$1" "${2:+ — }" "${2:-}"; warns=$((warns+1)); }
+    _ac_doctor_fail() { printf '  %s✗%s %s%s%s\n' "$err" "$rst" "$1" "${2:+ — }" "${2:-}"; fails=$((fails+1)); }
 
-    printf '%skiro-launcher doctor%s  (v%s)\n' "$dim" "$rst" "$_LK_VERSION"
+    printf '%sanycli doctor%s  (v%s)\n' "$dim" "$rst" "$_AC_VERSION"
 
     # --- Launcher configuration ---------------------------------------------
     printf '\n%s── Launcher configuration ──%s\n' "$dim" "$rst"
 
-    if [[ -f "$_LK_CONFIG_FILE" ]]; then
-        _lk_doctor_pass "config file present ($_LK_CONFIG_FILE)"
+    if [[ -f "$_AC_CONFIG_FILE" ]]; then
+        _ac_doctor_pass "config file present ($_AC_CONFIG_FILE)"
     else
-        _lk_doctor_warn "no config file yet ($_LK_CONFIG_FILE)" "defaults in use; run 'lk' then 'c' to configure"
+        _ac_doctor_warn "no config file yet ($_AC_CONFIG_FILE)" "defaults in use; run 'ac' then 'c' to configure"
     fi
 
-    if [[ -d "$_LK_PROJECTS_DIR" ]]; then
+    if [[ -d "$_AC_PROJECTS_DIR" ]]; then
         local _n_kids=0 _kid
-        for _kid in "$_LK_PROJECTS_DIR"/*/; do
+        for _kid in "$_AC_PROJECTS_DIR"/*/; do
             [[ -d "$_kid" ]] && _n_kids=$((_n_kids+1))
         done
         if (( _n_kids > 0 )); then
-            _lk_doctor_pass "projects directory exists with $_n_kids entr$([[ $_n_kids -eq 1 ]] && echo y || echo ies) ($_LK_PROJECTS_DIR)"
+            _ac_doctor_pass "projects directory exists with $_n_kids entr$([[ $_n_kids -eq 1 ]] && echo y || echo ies) ($_AC_PROJECTS_DIR)"
         else
-            _lk_doctor_warn "projects directory is empty ($_LK_PROJECTS_DIR)" "the menu will have nothing to list"
+            _ac_doctor_warn "projects directory is empty ($_AC_PROJECTS_DIR)" "the menu will have nothing to list"
         fi
     else
-        _lk_doctor_fail "projects directory not found ($_LK_PROJECTS_DIR)" "set projects_dir in config or \$LK_PROJECTS_DIR"
+        _ac_doctor_fail "projects directory not found ($_AC_PROJECTS_DIR)" "set projects_dir in config or \$AC_PROJECTS_DIR"
     fi
 
     printf '  %ssort order: %s · git status: %s · sessions: %s%s\n' \
-        "$dim" "${_LK_SORT_ORDER:-name}" "${_LK_SHOW_GIT_STATUS:-false}" "${_LK_SHOW_SESSIONS:-false}" "$rst"
+        "$dim" "${_AC_SORT_ORDER:-name}" "${_AC_SHOW_GIT_STATUS:-false}" "${_AC_SHOW_SESSIONS:-false}" "$rst"
 
     # --- Configured AI CLI --------------------------------------------------
     printf '\n%s── AI CLI ──%s\n' "$dim" "$rst"
-    printf '  %sconfigured CLI: %s %s%s\n' "$dim" "$_LK_CLI_TOOL" "$_LK_CLI_LAUNCH" "$rst"
-    if command -v "$_LK_CLI_TOOL" >/dev/null 2>&1; then
+    printf '  %sconfigured CLI: %s %s%s\n' "$dim" "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH" "$rst"
+    if command -v "$_AC_CLI_TOOL" >/dev/null 2>&1; then
         # Report the resolved executable path (type -P), which is what the
         # new-tab launch execs. If a shell alias shadows the tool name, note it:
         # the new tab runs the real binary, not the alias, so this explains any
         # divergence between current-tab (alias applies) and new-tab behavior.
         local _cli_path
-        _cli_path="$(type -P "$_LK_CLI_TOOL" 2>/dev/null)"
+        _cli_path="$(type -P "$_AC_CLI_TOOL" 2>/dev/null)"
         if [[ -n "$_cli_path" ]]; then
-            _lk_doctor_pass "$_LK_CLI_TOOL on PATH → $_cli_path"
+            _ac_doctor_pass "$_AC_CLI_TOOL on PATH → $_cli_path"
         else
-            _lk_doctor_pass "$_LK_CLI_TOOL is on PATH"
+            _ac_doctor_pass "$_AC_CLI_TOOL is on PATH"
         fi
-        if alias "$_LK_CLI_TOOL" >/dev/null 2>&1; then
+        if alias "$_AC_CLI_TOOL" >/dev/null 2>&1; then
             local _cli_alias
-            _cli_alias="$(alias "$_LK_CLI_TOOL" 2>/dev/null)"
-            _lk_doctor_warn "$_LK_CLI_TOOL is shadowed by a shell alias (${_cli_alias})" \
+            _cli_alias="$(alias "$_AC_CLI_TOOL" 2>/dev/null)"
+            _ac_doctor_warn "$_AC_CLI_TOOL is shadowed by a shell alias (${_cli_alias})" \
                 "new-tab launches run the resolved binary, not the alias"
         fi
         local _r_flag _p_flag _l_argv
-        _r_flag="$(_lk_cli_resume_flag "$_LK_CLI_TOOL")"
-        _p_flag="$(_lk_cli_picker_flag "$_LK_CLI_TOOL")"
-        _l_argv="$(_lk_cli_list_argv "$_LK_CLI_TOOL")"
-        if [[ -n "$_r_flag" ]]; then _lk_doctor_pass "resume supported ($_r_flag) — r<N>, lk resume"
-        else _lk_doctor_warn "no resume flag for $_LK_CLI_TOOL" "resume launches start fresh"; fi
-        if [[ -n "$_p_flag" ]]; then _lk_doctor_pass "session picker supported ($_p_flag) — p<N>, lk pick"
-        else _lk_doctor_warn "no session picker for $_LK_CLI_TOOL" "the picker starts fresh"; fi
-        if [[ -n "$_l_argv" ]]; then _lk_doctor_pass "session listing supported — Show last session works"
-        else _lk_doctor_warn "no session listing for $_LK_CLI_TOOL" "the session-aware menu shows nothing"; fi
+        _r_flag="$(_ac_cli_resume_flag "$_AC_CLI_TOOL")"
+        _p_flag="$(_ac_cli_picker_flag "$_AC_CLI_TOOL")"
+        _l_argv="$(_ac_cli_list_argv "$_AC_CLI_TOOL")"
+        if [[ -n "$_r_flag" ]]; then _ac_doctor_pass "resume supported ($_r_flag) — r<N>, ac resume"
+        else _ac_doctor_warn "no resume flag for $_AC_CLI_TOOL" "resume launches start fresh"; fi
+        if [[ -n "$_p_flag" ]]; then _ac_doctor_pass "session picker supported ($_p_flag) — p<N>, ac pick"
+        else _ac_doctor_warn "no session picker for $_AC_CLI_TOOL" "the picker starts fresh"; fi
+        if [[ -n "$_l_argv" ]]; then _ac_doctor_pass "session listing supported — Show last session works"
+        else _ac_doctor_warn "no session listing for $_AC_CLI_TOOL" "the session-aware menu shows nothing"; fi
     else
-        _lk_doctor_fail "$_LK_CLI_TOOL not on PATH" "the launcher can cd but cannot launch the CLI"
+        _ac_doctor_fail "$_AC_CLI_TOOL not on PATH" "the launcher can cd but cannot launch the CLI"
     fi
 
     # --- Delegated platform/dependency checks -------------------------------
     printf '\n%s── Platform & dependencies ──%s\n' "$dim" "$rst"
-    local _platform_check="$_LK_SCRIPT_DIR/tests/check-platform.sh"
+    local _platform_check="$_AC_SCRIPT_DIR/tests/check-platform.sh"
     local _platform_rc=0
     if [[ -f "$_platform_check" ]]; then
         # Run the shared platform checker so its output appears in the report;
@@ -3903,10 +3915,10 @@ _lk_doctor() {
         bash "$_platform_check"
         _platform_rc=$?
     else
-        _lk_doctor_warn "platform checker not found ($_platform_check)" "skipping dependency checks"
+        _ac_doctor_warn "platform checker not found ($_platform_check)" "skipping dependency checks"
     fi
 
-    unset -f _lk_doctor_pass _lk_doctor_warn _lk_doctor_fail 2>/dev/null
+    unset -f _ac_doctor_pass _ac_doctor_warn _ac_doctor_fail 2>/dev/null
 
     # --- Verdict ------------------------------------------------------------
     printf '\n'
@@ -3927,12 +3939,12 @@ _lk_doctor() {
 }
 
 # Plain listing, one project per line, suitable for scripts and completion.
-_lk_list_projects() {
-    _lk_collect_projects
+_ac_list_projects() {
+    _ac_collect_projects
     local dir base disp
-    for dir in "${_LK_PROJECT_DIRS[@]+"${_LK_PROJECT_DIRS[@]}"}"; do
+    for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
         base="$(basename "$dir")"
-        disp="$(_lk_project_label "$dir")"
+        disp="$(_ac_project_label "$dir")"
         if [[ "$disp" == "$base" ]]; then
             printf '%s\n' "$base"
         else
@@ -3943,37 +3955,37 @@ _lk_list_projects() {
 }
 
 # Launch directly by name, without showing the menu.
-_lk_launch_by_name() {
+_ac_launch_by_name() {
     local query="${1:-}"
     local resume="${2:-}"
 
-    if [[ ! -d "$_LK_PROJECTS_DIR" ]]; then
-        printf 'lk: projects directory not found: %s\n' "$_LK_PROJECTS_DIR" >&2
+    if [[ ! -d "$_AC_PROJECTS_DIR" ]]; then
+        printf 'ac: projects directory not found: %s\n' "$_AC_PROJECTS_DIR" >&2
         return 1
     fi
 
-    _lk_resolve_project "$query"
+    _ac_resolve_project "$query"
     local rc=$?
 
     if (( rc == 1 )); then
-        printf "lk: no project matching '%s'\n" "$query" >&2
-        printf "    run 'lk list' to see what is available\n" >&2
+        printf "ac: no project matching '%s'\n" "$query" >&2
+        printf "    run 'ac list' to see what is available\n" >&2
         return 1
     fi
     if (( rc == 2 )); then
-        printf "lk: '%s' matches more than one project:\n" "$query" >&2
+        printf "ac: '%s' matches more than one project:\n" "$query" >&2
         local d
-        for d in "${_LK_RESOLVED_MATCHES[@]}"; do
+        for d in "${_AC_RESOLVED_MATCHES[@]}"; do
             printf '      %s\n' "$(basename "$d")" >&2
         done
         return 1
     fi
 
-    _lk_launch_project "$_LK_RESOLVED_DIR" "$resume"
+    _ac_launch_project "$_AC_RESOLVED_DIR" "$resume"
     return $?
 }
 
-lk() {
+ac() {
     # zsh compatibility: scope bash-flavored option semantics (0-based arrays,
     # bash-style $BASH_REMATCH capture indexing, etc.) to this call tree only.
     # `-L` makes it local to this function and everything it calls, and it
@@ -3984,85 +3996,85 @@ lk() {
 
     # --- Non-interactive forms ---
     if (( $# > 0 )); then
-        _lk_load_config
+        _ac_load_config
 
         # Detect a resume/picker flag anywhere in the arguments and strip it, so
-        # "lk <name> --resume", "lk -r <name>", and "lk <name> --resume-picker"
+        # "ac <name> --resume", "ac -r <name>", and "ac <name> --resume-picker"
         # all work. The remaining args are re-examined by the dispatch below.
-        # _lk_resume carries the mode: "picker" or "1" (most recent).
-        local _lk_resume=""
-        local -a _lk_args=()
+        # _ac_resume carries the mode: "picker" or "1" (most recent).
+        local _ac_resume=""
+        local -a _ac_args=()
         local _a
         for _a in "$@"; do
             case "$_a" in
-                --resume-picker) _lk_resume="picker" ;;
-                --resume|-r) _lk_resume="1" ;;
-                *) _lk_args+=("$_a") ;;
+                --resume-picker) _ac_resume="picker" ;;
+                --resume|-r) _ac_resume="1" ;;
+                *) _ac_args+=("$_a") ;;
             esac
         done
-        set -- "${_lk_args[@]+"${_lk_args[@]}"}"
+        set -- "${_ac_args[@]+"${_ac_args[@]}"}"
 
-        # "lk resume <name>" — explicit resume subcommand. A project literally
+        # "ac resume <name>" — explicit resume subcommand. A project literally
         # named "resume" takes precedence (mirrors help/config/list handling).
-        if [[ "${1:-}" == "resume" ]] && ! _lk_project_exists_exact "resume"; then
+        if [[ "${1:-}" == "resume" ]] && ! _ac_project_exists_exact "resume"; then
             shift
             if [[ -z "${1:-}" ]]; then
-                printf 'lk: resume needs a project name (usage: lk resume <name>)\n' >&2
+                printf 'ac: resume needs a project name (usage: ac resume <name>)\n' >&2
                 return 2
             fi
-            _lk_launch_by_name "$1" "1"
+            _ac_launch_by_name "$1" "1"
             return $?
         fi
 
-        # "lk pick <name>" — explicit session-picker subcommand. A project named
+        # "ac pick <name>" — explicit session-picker subcommand. A project named
         # "pick" takes precedence.
-        if [[ "${1:-}" == "pick" ]] && ! _lk_project_exists_exact "pick"; then
+        if [[ "${1:-}" == "pick" ]] && ! _ac_project_exists_exact "pick"; then
             shift
             if [[ -z "${1:-}" ]]; then
-                printf 'lk: pick needs a project name (usage: lk pick <name>)\n' >&2
+                printf 'ac: pick needs a project name (usage: ac pick <name>)\n' >&2
                 return 2
             fi
-            _lk_launch_by_name "$1" "picker"
+            _ac_launch_by_name "$1" "picker"
             return $?
         fi
 
         # If a resume/picker flag was given but no positional args remain, there
         # is nothing to launch.
-        if [[ -n "$_lk_resume" && $# -eq 0 ]]; then
+        if [[ -n "$_ac_resume" && $# -eq 0 ]]; then
             local _flag_name="--resume"
-            [[ "$_lk_resume" == "picker" ]] && _flag_name="--resume-picker"
-            printf 'lk: %s needs a project name\n' "$_flag_name" >&2
+            [[ "$_ac_resume" == "picker" ]] && _flag_name="--resume-picker"
+            printf 'ac: %s needs a project name\n' "$_flag_name" >&2
             return 2
         fi
 
         case "${1:-}" in
-            -h|--help)    _lk_usage; return 0 ;;
-            -V|--version) printf 'kiro-launcher %s\n' "$_LK_VERSION"; return 0 ;;
-            -l|--list)    _lk_list_projects; return 0 ;;
-            --)           shift; _lk_launch_by_name "${1:-}" "$_lk_resume"; return $? ;;
+            -h|--help)    _ac_usage; return 0 ;;
+            -V|--version) printf 'anycli %s\n' "$_AC_VERSION"; return 0 ;;
+            -l|--list)    _ac_list_projects; return 0 ;;
+            --)           shift; _ac_launch_by_name "${1:-}" "$_ac_resume"; return $? ;;
             -*)
-                printf 'lk: unknown option: %s\n' "$1" >&2
-                _lk_usage >&2
+                printf 'ac: unknown option: %s\n' "$1" >&2
+                _ac_usage >&2
                 return 2
                 ;;
             help|version|list|config|doctor|setup)
                 # A project of the same name takes precedence over the subcommand
-                if _lk_project_exists_exact "$1"; then
-                    _lk_launch_by_name "$1"
+                if _ac_project_exists_exact "$1"; then
+                    _ac_launch_by_name "$1"
                     return $?
                 fi
                 case "$1" in
-                    help)    _lk_usage ;;
-                    version) printf 'kiro-launcher %s\n' "$_LK_VERSION" ;;
-                    list)    _lk_list_projects ;;
-                    config)  _lk_config_menu ;;
-                    doctor)  _lk_doctor ;;
-                    setup)   _lk_setup ;;
+                    help)    _ac_usage ;;
+                    version) printf 'anycli %s\n' "$_AC_VERSION" ;;
+                    list)    _ac_list_projects ;;
+                    config)  _ac_config_menu ;;
+                    doctor)  _ac_doctor ;;
+                    setup)   _ac_setup ;;
                 esac
                 return $?
                 ;;
             *)
-                _lk_launch_by_name "$1" "$_lk_resume"
+                _ac_launch_by_name "$1" "$_ac_resume"
                 return $?
                 ;;
         esac
@@ -4073,47 +4085,47 @@ lk() {
     # setup instead of erroring out with "projects directory not found". Skipped
     # when: a config already exists, a legacy config is present (it will be
     # migrated), stdin is not a TTY (piped/CI — keep the old error path so
-    # scripts and tests behave), or LK_PROJECTS_DIR is already exported to a
+    # scripts and tests behave), or AC_PROJECTS_DIR is already exported to a
     # valid directory. After the wizard writes the config, the loop below reads
-    # it via _lk_load_config and renders the menu in the same invocation.
-    local _lk_legacy_config="${HOME}/.config/kiro-launcher/config"
-    if [[ ! -f "$_LK_CONFIG_FILE" && ! -f "$_lk_legacy_config" && -t 0 ]] \
-        && [[ -z "${LK_PROJECTS_DIR:-}" || ! -d "${LK_PROJECTS_DIR:-}" ]]; then
-        _lk_first_run_wizard || return 1
+    # it via _ac_load_config and renders the menu in the same invocation.
+    local _ac_legacy_config="${HOME}/.config/anycli/config"
+    if [[ ! -f "$_AC_CONFIG_FILE" && ! -f "$_ac_legacy_config" && -t 0 ]] \
+        && [[ -z "${AC_PROJECTS_DIR:-}" || ! -d "${AC_PROJECTS_DIR:-}" ]]; then
+        _ac_first_run_wizard || return 1
     fi
 
     # Run update check on first iteration only (time-gated internally)
-    local _lk_checked_updates=0
+    local _ac_checked_updates=0
     # Active name filter, so long project lists stay navigable
-    local _lk_filter=""
+    local _ac_filter=""
 
     while true; do
-        _lk_load_config
+        _ac_load_config
 
-        if [[ ! -d "$_LK_PROJECTS_DIR" ]]; then
-            echo "Error: Projects directory not found: $_LK_PROJECTS_DIR"
-            echo "Set LK_PROJECTS_DIR or configure ~/.config/kiro-launcher/config.yaml"
+        if [[ ! -d "$_AC_PROJECTS_DIR" ]]; then
+            echo "Error: Projects directory not found: $_AC_PROJECTS_DIR"
+            echo "Set AC_PROJECTS_DIR or configure ~/.config/anycli/config.yaml"
             return 1
         fi
 
-        # Run update check once per lk session (the function handles 24h time-gating)
-        if [[ "$_lk_checked_updates" == "0" ]]; then
-            _lk_update_check
-            _lk_checked_updates=1
+        # Run update check once per ac session (the function handles 24h time-gating)
+        if [[ "$_ac_checked_updates" == "0" ]]; then
+            _ac_update_check
+            _ac_checked_updates=1
         fi
 
         # Build project list (shared with the non-interactive path)
-        _lk_collect_projects
-        local -a all_dirs=("${_LK_PROJECT_DIRS[@]+"${_LK_PROJECT_DIRS[@]}"}")
+        _ac_collect_projects
+        local -a all_dirs=("${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}")
         local -a dirs=()
-        if [[ -z "$_lk_filter" ]]; then
+        if [[ -z "$_ac_filter" ]]; then
             dirs=("${all_dirs[@]+"${all_dirs[@]}"}")
         else
-            local _f_lower="$(_lk_lower "$_lk_filter")" _f_dir _f_base _f_disp
+            local _f_lower="$(_ac_lower "$_ac_filter")" _f_dir _f_base _f_disp
             for _f_dir in "${all_dirs[@]+"${all_dirs[@]}"}"; do
                 _f_base="$(basename "$_f_dir")"
-                _f_disp="$(_lk_project_label "$_f_dir")"
-                if [[ "$(_lk_lower "$_f_base")" == *"$_f_lower"* || "$(_lk_lower "$_f_disp")" == *"$_f_lower"* ]]; then
+                _f_disp="$(_ac_project_label "$_f_dir")"
+                if [[ "$(_ac_lower "$_f_base")" == *"$_f_lower"* || "$(_ac_lower "$_f_disp")" == *"$_f_lower"* ]]; then
                     dirs+=("$_f_dir")
                 fi
             done
@@ -4129,51 +4141,51 @@ lk() {
         local c_accent=$'\e[0;36m'
         local c_update=$'\e[1;33m'
 
-        _lk_clear
+        _ac_clear
 
         # Display menu
         printf "\n"
         printf "  %s╭─────────────────────────────────────╮%s\n" "$c_title" "$reset"
-        local _lk_hdr="Kiro Launcher"
-        local _lk_ver="v$_LK_VERSION"
-        local _lk_pad=$(( 37 - 2 - ${#_lk_hdr} - 2 - ${#_lk_ver} ))
-        printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_lk_hdr" "$_lk_pad" "" "$c_dim" "$_lk_ver" "$reset" "$c_title" "$reset"
+        local _ac_hdr="anycli"
+        local _ac_ver="v$_AC_VERSION"
+        local _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
+        printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
         # Show CLI tool version on second line
-        if [[ -z "${_LK_CLI_VERSION_CACHED:-}" ]]; then
-            _LK_CLI_VERSION_CACHED="$($_LK_CLI_TOOL --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")"
+        if [[ -z "${_AC_CLI_VERSION_CACHED:-}" ]]; then
+            _AC_CLI_VERSION_CACHED="$($_AC_CLI_TOOL --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")"
         fi
-        if [[ -n "$_LK_CLI_VERSION_CACHED" ]]; then
-            local _cli_label="$_LK_CLI_TOOL $_LK_CLI_VERSION_CACHED"
+        if [[ -n "$_AC_CLI_VERSION_CACHED" ]]; then
+            local _cli_label="$_AC_CLI_TOOL $_AC_CLI_VERSION_CACHED"
             local _cli_pad=$(( 37 - 2 - ${#_cli_label} - 2 ))
             printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
                 "$c_title" "$reset" "$c_dim" "$_cli_label" "$_cli_pad" "" "$reset" "$c_title" "$reset"
         fi
-        if _lk_update_available; then
-            local _lk_update_msg=""
-            if [[ "${_LK_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                if [[ -n "$_LK_CLI_LATEST_VERSION" ]]; then
-                    _lk_update_msg="kiro-cli ${_LK_CLI_LATEST_VERSION}"
+        if _ac_update_available; then
+            local _ac_update_msg=""
+            if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+                if [[ -n "$_AC_CLI_LATEST_VERSION" ]]; then
+                    _ac_update_msg="kiro-cli ${_AC_CLI_LATEST_VERSION}"
                 else
-                    _lk_update_msg="kiro-cli"
+                    _ac_update_msg="kiro-cli"
                 fi
             fi
-            if [[ "${_LK_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                if [[ -n "$_lk_update_msg" ]]; then
-                    _lk_update_msg="${_lk_update_msg} + launcher"
+            if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+                if [[ -n "$_ac_update_msg" ]]; then
+                    _ac_update_msg="${_ac_update_msg} + launcher"
                 else
-                    _lk_update_msg="launcher"
+                    _ac_update_msg="launcher"
                 fi
             fi
-            if [[ "${_LK_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+            if [[ "${_AC_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]; then
                 local _app_count
-                _app_count=$(echo "$_LK_APPS_UPDATE_LIST" | wc -w)
-                if [[ -n "$_lk_update_msg" ]]; then
-                    _lk_update_msg="${_lk_update_msg} + ${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
+                _app_count=$(echo "$_AC_APPS_UPDATE_LIST" | wc -w)
+                if [[ -n "$_ac_update_msg" ]]; then
+                    _ac_update_msg="${_ac_update_msg} + ${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
                 else
-                    _lk_update_msg="${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
+                    _ac_update_msg="${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
                 fi
             fi
-            local _update_label="⬆ ${_lk_update_msg} available"
+            local _update_label="⬆ ${_ac_update_msg} available"
             local _upd_pad=$(( 37 - 2 - ${#_update_label} - 2 ))
             printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
                 "$c_title" "$reset" "$c_update" "$_update_label" "$_upd_pad" "" "$reset" "$c_title" "$reset"
@@ -4189,12 +4201,12 @@ lk() {
         ((index++))
 
         # Entry 2: root (cd + kiro)
-        printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "$(basename "$_LK_PROJECTS_DIR")" "$reset"
+        printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "$(basename "$_AC_PROJECTS_DIR")" "$reset"
         ((index++))
 
-        if [[ -n "$_lk_filter" ]]; then
+        if [[ -n "$_ac_filter" ]]; then
             printf "   %s%s%s  %sfilter: %s%s  %s(/ to clear)%s\n" \
-                "$c_dim" "──" "$reset" "$c_accent" "$_lk_filter" "$reset" "$c_dim" "$reset"
+                "$c_dim" "──" "$reset" "$c_accent" "$_ac_filter" "$reset" "$c_dim" "$reset"
             if (( ${#dirs[@]} == 0 )); then
                 printf "   %sno projects match%s\n" "$c_dim" "$reset"
             fi
@@ -4205,22 +4217,22 @@ lk() {
             local _dirname
             _dirname="$(basename "$dir")"
             local _safe_dirname
-            _safe_dirname="$(_lk_safe_name "$_dirname")"
+            _safe_dirname="$(_ac_safe_name "$_dirname")"
             local _display_name
-            _display_name="$(_lk_project_label "$dir")"
+            _display_name="$(_ac_project_label "$dir")"
             local _git_info=""
-            if [[ "${_LK_SHOW_GIT_STATUS:-false}" == "true" ]]; then
-                _git_info="$(_lk_git_summary "$dir")"
+            if [[ "${_AC_SHOW_GIT_STATUS:-false}" == "true" ]]; then
+                _git_info="$(_ac_git_summary "$dir")"
             fi
             local _app_ver="" _app_has_update=""
             # Check if this project is a tracked app and get its version
             local _app_name _app_path
-            for _app_name in "${_LK_TRACKED_APP_NAMES[@]+"${_LK_TRACKED_APP_NAMES[@]}"}"; do
-                _app_path="$(_lk_app_field "$_app_name" path)"
+            for _app_name in "${_AC_TRACKED_APP_NAMES[@]+"${_AC_TRACKED_APP_NAMES[@]}"}"; do
+                _app_path="$(_ac_app_field "$_app_name" path)"
                 if [[ -n "$_app_path" && ( "$_app_path" == "$dir" || "$_app_path" == "${dir%/}" ) ]]; then
-                    _app_ver=$(_lk_app_version "$_app_name")
+                    _app_ver=$(_ac_app_version "$_app_name")
                     # Check if this app has an update available
-                    if [[ " ${_LK_APPS_UPDATE_LIST:-} " == *" $_app_name "* ]]; then
+                    if [[ " ${_AC_APPS_UPDATE_LIST:-} " == *" $_app_name "* ]]; then
                         _app_has_update=1
                     fi
                     break
@@ -4230,9 +4242,9 @@ lk() {
             [[ -n "$_git_info" ]] && _git_suffix="$(printf "  %s%s%s" "$c_dim" "$_git_info" "$reset")"
             # Session suffix: last-session marker + title + age, opt-in and cached.
             local _session_suffix=""
-            if [[ "${_LK_SHOW_SESSIONS:-false}" == "true" ]]; then
+            if [[ "${_AC_SHOW_SESSIONS:-false}" == "true" ]]; then
                 local _sess_info
-                _sess_info="$(_lk_session_suffix "$dir")"
+                _sess_info="$(_ac_session_suffix "$dir")"
                 [[ -n "$_sess_info" ]] && _session_suffix="$(printf "  %s%s%s" "$c_dim" "$_sess_info" "$reset")"
             fi
             if [[ -n "$_app_ver" && -n "$_app_has_update" ]]; then
@@ -4250,10 +4262,10 @@ lk() {
         # A "?" help key is offered only when the configured CLI supports the
         # session triggers, so the help screen always has something to show.
         local _help_key=""
-        if [[ -n "$(_lk_cli_resume_flag "$_LK_CLI_TOOL")" || -n "$(_lk_cli_picker_flag "$_LK_CLI_TOOL")" ]]; then
+        if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" || -n "$(_ac_cli_picker_flag "$_AC_CLI_TOOL")" ]]; then
             _help_key="$(printf "   %s ?%s  help" "$c_num" "$reset")"
         fi
-        if _lk_update_available; then
+        if _ac_update_available; then
             printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s q%s  quit%s\n" \
                 "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
         else
@@ -4267,12 +4279,12 @@ lk() {
 
         # Read input, with an idle timeout
         local key read_rc=0
-        read -r -t "$_LK_MENU_TIMEOUT" key || read_rc=$?
+        read -r -t "$_AC_MENU_TIMEOUT" key || read_rc=$?
         if (( read_rc > 128 )); then
             # Timed out. Say so rather than vanishing, which was
             # indistinguishable from a crash.
-            printf "\n  %sNo input for %ss — exiting. Run lk again when ready.%s\n" \
-                "$c_dim" "$_LK_MENU_TIMEOUT" "$reset"
+            printf "\n  %sNo input for %ss — exiting. Run ac again when ready.%s\n" \
+                "$c_dim" "$_AC_MENU_TIMEOUT" "$reset"
             return 0
         elif (( read_rc != 0 )); then
             # EOF (pipe closed or Ctrl-D)
@@ -4286,35 +4298,35 @@ lk() {
 
         # Config shortcut
         if [[ "$key" == "c" || "$key" == "C" ]]; then
-            _lk_config_menu
+            _ac_config_menu
             continue
         fi
 
         # Update
         if [[ "$key" == "u" || "$key" == "U" ]]; then
-            _lk_do_update
+            _ac_do_update
             continue
         fi
 
         # Version/changelog
         if [[ "$key" == "v" || "$key" == "V" ]]; then
-            _lk_show_changelog
+            _ac_show_changelog
             continue
         fi
 
         # Key help (session triggers etc.)
         if [[ "$key" == "?" ]]; then
-            _lk_show_key_help
+            _ac_show_key_help
             continue
         fi
 
         # "/" clears the filter; "/text" sets it explicitly
         if [[ "$key" == "/" ]]; then
-            _lk_filter=""
+            _ac_filter=""
             continue
         fi
         if [[ "$key" == /* ]]; then
-            _lk_filter="${key#/}"
+            _ac_filter="${key#/}"
             continue
         fi
 
@@ -4325,11 +4337,11 @@ lk() {
             local rkey="${BASH_REMATCH[1]}"
             if (( rkey >= 3 && rkey < index )); then
                 local rselected="${dirs[$((rkey - 3))]}"
-                _lk_launch_project "$rselected" "1"
-                if [[ -z "${_LK_LAUNCHED_NEW_TAB:-}" ]]; then
+                _ac_launch_project "$rselected" "1"
+                if [[ -z "${_AC_LAUNCHED_NEW_TAB:-}" ]]; then
                     return
                 fi
-                unset _LK_LAUNCHED_NEW_TAB
+                unset _AC_LAUNCHED_NEW_TAB
                 read -r -t 0.1 -n 10000 _ 2>/dev/null || true
             fi
             continue
@@ -4341,11 +4353,11 @@ lk() {
             local pkey="${BASH_REMATCH[1]}"
             if (( pkey >= 3 && pkey < index )); then
                 local pselected="${dirs[$((pkey - 3))]}"
-                _lk_launch_project "$pselected" "picker"
-                if [[ -z "${_LK_LAUNCHED_NEW_TAB:-}" ]]; then
+                _ac_launch_project "$pselected" "picker"
+                if [[ -z "${_AC_LAUNCHED_NEW_TAB:-}" ]]; then
                     return
                 fi
-                unset _LK_LAUNCHED_NEW_TAB
+                unset _AC_LAUNCHED_NEW_TAB
                 read -r -t 0.1 -n 10000 _ 2>/dev/null || true
             fi
             continue
@@ -4353,7 +4365,7 @@ lk() {
 
         # Any other non-numeric input is treated as a name filter
         if [[ -n "$key" && ! "$key" =~ ^[0-9]+$ ]]; then
-            _lk_filter="$key"
+            _ac_filter="$key"
             continue
         fi
 
@@ -4364,22 +4376,22 @@ lk() {
 
         # Handle selection — break out of loop to execute
         if ((key == 1 )); then
-            cd "$_LK_PROJECTS_DIR" || return 1
+            cd "$_AC_PROJECTS_DIR" || return 1
             return
         elif ((key == 2 )); then
-            cd "$_LK_PROJECTS_DIR" || return 1
+            cd "$_AC_PROJECTS_DIR" || return 1
             local flags
-            flags=$(_lk_get_flags "$(basename "$_LK_PROJECTS_DIR")")
-            _lk_run_cli "$flags"
+            flags=$(_ac_get_flags "$(basename "$_AC_PROJECTS_DIR")")
+            _ac_run_cli "$flags"
             return
         else
             local selected="${dirs[$((key - 3))]}"
-            _lk_launch_project "$selected"
+            _ac_launch_project "$selected"
             # If launched in a new tab, keep menu open; otherwise we already cd'd
-            if [[ -z "${_LK_LAUNCHED_NEW_TAB:-}" ]]; then
+            if [[ -z "${_AC_LAUNCHED_NEW_TAB:-}" ]]; then
                 return
             fi
-            unset _LK_LAUNCHED_NEW_TAB
+            unset _AC_LAUNCHED_NEW_TAB
             # Flush any buffered input (focus events from tab switch)
             read -r -t 0.1 -n 10000 _ 2>/dev/null || true
             continue

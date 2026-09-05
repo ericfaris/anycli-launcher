@@ -1,0 +1,46 @@
+[
+  {
+    "name": "detects_available_shells",
+    "prompt": "install anycli",
+    "expected_patterns": [
+      "zsh|bash",
+      "which shell|what shell|shell do you use"
+    ],
+    "description": "Skill should detect available shells and ask user to choose"
+  },
+  {
+    "name": "handles_already_installed",
+    "prompt": "install anycli for zsh",
+    "expected_patterns": [
+      "already installed|already sourced|Already installed",
+      "zshrc|.zshrc"
+    ],
+    "description": "When anycli is already in ~/.zshrc, skill should detect and inform user"
+  },
+  {
+    "name": "hands_off_to_wizard_instead_of_collecting_config",
+    "prompt": "I just installed anycli, now configure it",
+    "expected_patterns": [
+      "ac\\b",
+      "wizard|first[- ]run|first time"
+    ],
+    "description": "Skill should NOT collect config itself -- it should tell the user to run `ac`, which runs anycli's own first-run wizard"
+  },
+  {
+    "name": "does_not_write_config_file_itself",
+    "prompt": "yes, my projects are in ~/dev, use --trust-all-tools as default flags, no per-project overrides",
+    "expected_patterns": [
+      "ac\\b",
+      "wizard|~/.config/anycli/config.yaml"
+    ],
+    "description": "Skill should defer this to anycli's own wizard rather than writing ~/.config/anycli/config.yaml by hand"
+  },
+  {
+    "name": "cli_agnostic_no_hard_requirement",
+    "prompt": "install anycli for bash",
+    "expected_patterns": [
+      "claude|kiro-cli|aider|goose|codex|amp|AI CLI"
+    ],
+    "description": "Skill should mention checking for a known AI CLI on PATH but must not require kiro-cli specifically -- anycli has no privileged default tool"
+  }
+]

@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.0.0
+
+Renamed the project from kiro-launcher to **anycli**. Breaking change — see
+"Upgrading from kiro-launcher?" in the README.
+
+### Changed
+- The project, entry file (`kiro-launcher.bash` → `anycli.bash`), config
+  directory (`~/.config/kiro-launcher/` → `~/.config/anycli/`), and shell
+  command (`lk` → `ac`) are all renamed. Every internal identifier prefix
+  (`_lk_`/`_LK_` → `_ac_`/`_AC_`) follows the same rename.
+- **anycli is now CLI-agnostic.** There is no privileged default AI CLI
+  tool — `kiro-cli` is still a supported, auto-detected choice alongside
+  `claude`, `aider`, `goose`, `codex`, and `amp`, but the launcher no longer
+  silently assumes it. The first-run wizard now asks you to type a command
+  name by hand when nothing recognized is found on PATH, instead of quietly
+  defaulting to `kiro-cli`.
+- Zsh compatibility: this file can now be sourced correctly from `~/.zshrc`,
+  not just `~/.bashrc`/Git Bash. Several genuine bash/zsh differences (regex
+  parsing, indirect expansion, array indexing, case conversion) are shimmed;
+  `ac()` scopes `emulate -L bash` for its whole call tree so the rest of your
+  interactive zsh session is never affected.
+- Verified across Linux bash, zsh, macOS, and Windows Git Bash (including
+  real GitHub Actions runners for macOS and Windows, not just local testing).
+
 ## 2.2.1
 
 Patch release. Fixes three new-tab launch regressions.

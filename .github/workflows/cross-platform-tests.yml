@@ -84,6 +84,9 @@ jobs:
             *) echo "FAIL: resume did not pass --continue"; echo "$resume_out"; exit 1 ;;
           esac
 
-          doctor_out=$(lk doctor 2>&1)
+          # Informational only -- doctor legitimately exits non-zero when it
+          # flags an environment gap (e.g. no wt.exe on a headless runner),
+          # which shouldn't fail this smoke test under `zsh -e`.
+          doctor_out=$(lk doctor 2>&1) || true
           echo "$doctor_out" | tail -5
           echo "zsh checks passed"

@@ -20,6 +20,7 @@ _LK_VERSION="$(cat "$_LK_SCRIPT_DIR/VERSION" 2>/dev/null || echo "dev")"
 # everything else relies on the emulate scoping.
 _lk_vars_with_prefix() {
     if [[ -n "${ZSH_VERSION:-}" ]]; then
+        # shellcheck disable=SC2296,SC2086  # zsh-only syntax; this branch never runs under bash, which shellcheck lints as
         print -l -- ${(k)parameters[(I)$1*]} 2>/dev/null
     else
         compgen -v "$1" 2>/dev/null
@@ -55,6 +56,7 @@ _lk_assoc_keys() {
 # equivalent syntax for (it uses ${(L)var} instead).
 _lk_lower() {
     if [[ -n "${ZSH_VERSION:-}" ]]; then
+        # shellcheck disable=SC2296  # zsh-only syntax; this branch never runs under bash, which shellcheck lints as
         printf '%s' "${(L)1}"
     else
         printf '%s' "${1,,}"

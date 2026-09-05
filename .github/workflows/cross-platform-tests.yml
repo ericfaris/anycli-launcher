@@ -49,6 +49,17 @@ jobs:
           source ./kiro-launcher.bash
           echo "sourced OK under zsh $ZSH_VERSION"
 
+          # A fresh runner has no ~/.config/kiro-launcher/config.yaml, and
+          # _lk_load_config (called from inside lk()) resets _LK_CLI_TOOL to
+          # its built-in default regardless of what's set beforehand -- so
+          # the only way to make it pick up "claude" is via a real config
+          # file, same as this project's actual local setup.
+          export _LK_CONFIG_FILE="$(mktemp)"
+          cat > "$_LK_CONFIG_FILE" << 'CFG'
+          cli_tool: "claude"
+          cli_launch: ""
+          CFG
+
           mkdir -p /tmp/lk-ci-projects/demo-project
           export LK_PROJECTS_DIR=/tmp/lk-ci-projects
 

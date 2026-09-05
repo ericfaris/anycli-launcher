@@ -2,3 +2,9 @@
 # but left behind if a run is interrupted).
 tests/.mock-bin/
 tests/.test-kiro.log
+
+# Windows NTFS marks a file downloaded from the internet (e.g. via a browser
+# zip download) with a same-named ":Zone.Identifier" alternate-data-stream
+# companion. They carry no content, and their literal colon makes Git for
+# Windows refuse to check the tree out at all ("invalid path").
+*:Zone.Identifier

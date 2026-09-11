@@ -2256,6 +2256,34 @@ _ac_config_edit_projects_dir() {
     fi
 }
 
+# Resolve a chosen entry from _ac_get_flag_opts's output into the flag text
+# to add, prompting for a value when the entry needs one. Sets _AC_NEW_FLAG
+# (empty when nothing should be added -- "none (use default)" was chosen, or
+# "custom"/a parameterized flag was chosen but nothing was typed). Shared by
+# _ac_config_edit_default_flags and _ac_config_edit_project_flags, whose
+# flag-picker loops were otherwise identical.
+_ac_resolve_chosen_flag() {
+    local chosen="$1"
+    _AC_NEW_FLAG=""
+    if [[ "$chosen" == "custom" ]]; then
+        printf "  Enter flag: "
+        read -r _AC_NEW_FLAG
+    elif [[ "$chosen" == "none (use default)" ]]; then
+        return 0
+    elif [[ "$chosen" == *"=<"* ]]; then
+        local flag_name="${chosen%%=<*}"
+        local param_hint="${chosen#*=<}"
+        param_hint="${param_hint%>}"
+        printf "  Enter value for %s (%s): " "$flag_name" "$param_hint"
+        local param_val
+        read -r param_val
+        [[ -n "$param_val" ]] && _AC_NEW_FLAG="$flag_name $param_val"
+    else
+        _AC_NEW_FLAG="$chosen"
+    fi
+    return 0
+}
+
 _ac_config_edit_default_flags() {
     local c_dim=$'\e[2m'
     local c_title=$'\e[1;36m'
@@ -2302,24 +2330,8 @@ _ac_config_edit_default_flags() {
         fi
 
         local chosen="${flag_opts[$((cnum - 1))]}"
-        local new_flag=""
-
-        if [[ "$chosen" == "custom" ]]; then
-            printf "  Enter flag: "
-            read -r new_flag
-        elif [[ "$chosen" == "none (use default)" ]]; then
-            continue
-        elif [[ "$chosen" == *"=<"* ]]; then
-            local flag_name="${chosen%%=<*}"
-            local param_hint="${chosen#*=<}"
-            param_hint="${param_hint%>}"
-            printf "  Enter value for %s (%s): " "$flag_name" "$param_hint"
-            local param_val
-            read -r param_val
-            [[ -n "$param_val" ]] && new_flag="$flag_name $param_val"
-        else
-            new_flag="$chosen"
-        fi
+        _ac_resolve_chosen_flag "$chosen"
+        local new_flag="$_AC_NEW_FLAG"
 
         if [[ -n "$new_flag" ]]; then
             _AC_CLI_FLAGS="${_AC_CLI_FLAGS:+$_AC_CLI_FLAGS }$new_flag"
@@ -2411,24 +2423,8 @@ _ac_config_edit_project_flags() {
         fi
 
         local chosen="${flag_opts[$((cnum - 1))]}"
-        local new_flag=""
-
-        if [[ "$chosen" == "custom" ]]; then
-            printf "  Enter flag: "
-            read -r new_flag
-        elif [[ "$chosen" == "none (use default)" ]]; then
-            continue
-        elif [[ "$chosen" == *"=<"* ]]; then
-            local flag_name="${chosen%%=<*}"
-            local param_hint="${chosen#*=<}"
-            param_hint="${param_hint%>}"
-            printf "  Enter value for %s (%s): " "$flag_name" "$param_hint"
-            local param_val
-            read -r param_val
-            [[ -n "$param_val" ]] && new_flag="$flag_name $param_val"
-        else
-            new_flag="$chosen"
-        fi
+        _ac_resolve_chosen_flag "$chosen"
+        local new_flag="$_AC_NEW_FLAG"
 
         if [[ -n "$new_flag" ]]; then
             current=""

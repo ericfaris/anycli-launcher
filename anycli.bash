@@ -82,10 +82,22 @@ _ac_lower() {
 # `read -n 1` is NOT the raw-keypress equivalent -- it silently hangs waiting
 # for a newline that never comes (confirmed interactively: the keystroke
 # echoes but read never returns). zsh's actual single-raw-character read is
-# `read -k 1`.
+# `read -k 1`, but `-k` needs a real terminal device: over a plain pipe (no
+# tty at all -- piped/scripted invocations, tests, CI) it fails outright
+# with "not interactive and can't open terminal" instead of reading
+# anything, confirmed both interactively via a pty and over a plain pipe.
+# So `-k` is used only when stdin is actually a terminal; otherwise this
+# falls back to a plain line read, which works the same as bash's `-n 1`
+# does over a non-tty pipe (reads to the next newline or EOF, whichever
+# comes first -- there is no raw single-keypress option for non-tty input in
+# either shell).
 _ac_pause() {
     if [[ -n "${ZSH_VERSION:-}" ]]; then
-        read -k 1 -r _ac_pause_key 2>/dev/null
+        if [[ -t 0 ]]; then
+            read -k 1 -r _ac_pause_key 2>/dev/null
+        else
+            read -r _ac_pause_key 2>/dev/null
+        fi
     else
         read -r -n 1 _ac_pause_key 2>/dev/null
     fi

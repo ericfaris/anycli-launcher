@@ -1823,6 +1823,17 @@ rm -rf "$WT_NONE_DIR"
 unset _AC_WT_BIN
 
 # ═══════════════════════════════════════
+echo "── _ac_pause: press-any-key read ──"
+# Under bash, _ac_pause is a thin wrapper over `read -r -n 1`. The zsh branch
+# (read -k 1 when a real tty is attached, a plain line read otherwise -- `-k`
+# errors outright over a non-tty pipe) can only be exercised under a real
+# zsh, covered by the CI zsh job.
+pause_out=$(printf 'Zrest' | { _ac_pause; printf '%s' "$_ac_pause_key"; })
+assert_eq "pause: consumes exactly one character" "Z" "$pause_out"
+pause_rest=$(printf 'Zrest' | { _ac_pause; IFS= read -r r; printf '%s' "$r"; })
+assert_eq "pause: leaves the remaining input for the next read" "rest" "$pause_rest"
+
+# ═══════════════════════════════════════
 echo "── _ac_platform: single detection seam ──"
 
 # _AC_PLATFORM_OVERRIDE must win outright, every call, regardless of what real

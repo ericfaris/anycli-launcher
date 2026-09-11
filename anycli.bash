@@ -345,56 +345,25 @@ _ac_sweep_stale_tab_scripts() {
 # Run a command with a spinner indicator.
 # Usage: _ac_spin "message" command [args...]
 # Output from the command is suppressed; on failure the exit code is returned.
-_ac_spin() {
-    local msg="$1"; shift
+# Shared implementation for _ac_spin and _ac_spin_verbose (they differed only
+# in whether captured output is shown on failure).
+# Usage: _ac_spin_run <verbose:0|1> "message" command [args...]
+_ac_spin_run() {
+    local verbose="$1" msg="$2"; shift 2
     local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
     local c_dim=$'\e[2m'
     local c_cyan=$'\e[1;36m'
     local c_green=$'\e[1;32m'
     local reset=$'\e[0m'
     local i=0 pid
-
-    # Run command in background
-    "$@" >/dev/null 2>&1 &
-    pid=$!
-
-    # Animate spinner while command runs
-    printf "  %s%s%s %s" "$c_cyan" "${frames[0]}" "$reset" "$msg"
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r  %s%s%s %s" "$c_cyan" "${frames[i % ${#frames[@]}]}" "$reset" "$msg"
-        ((i++))
-        sleep 0.08
-    done
-
-    # Get exit status
-    wait "$pid"
-    local rc=$?
-
-    # Clear spinner line and show result
-    printf "\r"
-    if [[ $rc -eq 0 ]]; then
-        printf "  %s✓%s %s\n" "$c_green" "$reset" "$msg"
-    else
-        printf "  %s✗%s %s %s(failed)%s\n" $'\e[1;31m' "$reset" "$msg" "$c_dim" "$reset"
+    local tmpout="/dev/null"
+    local -a own_tmp=()
+    if (( verbose )); then
+        tmpout=$(mktemp)
+        own_tmp=("$tmpout")
     fi
-    return $rc
-}
 
-# Run a command with a spinner, capturing output on failure.
-# Usage: _ac_spin_verbose "message" command [args...]
-# On success: shows ✓. On failure: shows ✗ and prints captured output.
-_ac_spin_verbose() {
-    local msg="$1"; shift
-    local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local c_dim=$'\e[2m'
-    local c_cyan=$'\e[1;36m'
-    local c_green=$'\e[1;32m'
-    local reset=$'\e[0m'
-    local i=0 pid
-    local tmpout
-    tmpout=$(mktemp)
-
-    # Run command in background, capture output
+    # Run command in background, capturing output only when verbose
     "$@" >"$tmpout" 2>&1 &
     pid=$!
 
@@ -416,13 +385,28 @@ _ac_spin_verbose() {
         printf "  %s✓%s %s\n" "$c_green" "$reset" "$msg"
     else
         printf "  %s✗%s %s %s(failed)%s\n" $'\e[1;31m' "$reset" "$msg" "$c_dim" "$reset"
-        # Show captured output on failure
-        while IFS= read -r line; do
-            printf "    %s%s%s\n" "$c_dim" "$line" "$reset"
-        done < "$tmpout"
+        if (( verbose )); then
+            # Show captured output on failure
+            while IFS= read -r line; do
+                printf "    %s%s%s\n" "$c_dim" "$line" "$reset"
+            done < "$tmpout"
+        fi
     fi
-    rm -f "$tmpout"
+    (( ${#own_tmp[@]} > 0 )) && rm -f "${own_tmp[@]}"
     return $rc
+}
+
+# Run a command with a spinner indicator. Output is always suppressed.
+# Usage: _ac_spin "message" command [args...]
+_ac_spin() {
+    _ac_spin_run 0 "$@"
+}
+
+# Run a command with a spinner, capturing output on failure.
+# Usage: _ac_spin_verbose "message" command [args...]
+# On success: shows ✓. On failure: shows ✗ and prints captured output.
+_ac_spin_verbose() {
+    _ac_spin_run 1 "$@"
 }
 
 _AC_CONFIG_FILE="${HOME}/.config/anycli/config.yaml"

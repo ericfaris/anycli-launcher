@@ -542,8 +542,13 @@ _ac_migrate_legacy() {
     # Write new YAML config
     _ac_write_config
 
-    # Rename old file so migration doesn't repeat
-    mv "$legacy_file" "${legacy_file}.bak" 2>/dev/null
+    # Rename old file so migration doesn't repeat -- but only once the new
+    # config actually landed. A failed or truncated write (disk full,
+    # permissions) previously still renamed the legacy file away, leaving
+    # neither a working config nor a way to retry the migration next run.
+    if [[ -s "$_AC_CONFIG_FILE" ]] && grep -q '^projects_dir:' "$_AC_CONFIG_FILE" 2>/dev/null; then
+        mv "$legacy_file" "${legacy_file}.bak" 2>/dev/null
+    fi
 }
 
 _ac_parse_yaml() {
@@ -1189,10 +1194,15 @@ _ac_parse_cli_flags() {
 
     # Deduplicate and sort, remove --help/--version
     local flags
-    flags=$(echo "$results" | sort -u | grep -v '^--help' | grep -v '^--version' | grep -v '^$')
+    flags=$(sort -u <<< "$results" | grep -v '^--help' | grep -v '^--version' | grep -v '^$')
 
-    # Cache results
-    echo "$flags" > "$cache"
+    # Cache results. Written atomically (temp file + mv) so a concurrent `ac`
+    # invocation reading the cache never sees a half-written file.
+    local tmp_cache
+    tmp_cache="$(mktemp "${cache}.XXXXXX" 2>/dev/null)" && {
+        echo "$flags" > "$tmp_cache"
+        mv "$tmp_cache" "$cache" 2>/dev/null || rm -f "$tmp_cache"
+    }
     echo "$flags"
 }
 
@@ -3286,6 +3296,17 @@ _ac_git_summary() {
     return 0
 }
 
+# True when "$1" < "$2" under whatever collation is in effect in the calling
+# environment. Exists so callers can force byte-wise (C-locale) string
+# comparison for data that must sort the same regardless of the user's
+# locale (e.g. ISO8601 timestamps) by prefixing the call with LC_ALL=C --
+# `LC_ALL=C [[ "$a" < "$b" ]]` is not valid bash ([[ is a keyword, not a
+# simple command, so a leading var=value assignment doesn't apply to it),
+# but `LC_ALL=C _ac_str_lt "$a" "$b"` is.
+_ac_str_lt() {
+    [[ "$1" < "$2" ]]
+}
+
 # Convert an ISO8601 timestamp (e.g. 2026-09-04T13:19:09.305Z) to epoch seconds.
 # Portable across GNU date (Linux, WSL, Git Bash coreutils) and BSD/macOS date.
 # Prints the epoch or nothing on failure.
@@ -3352,10 +3373,14 @@ _ac_session_summary() {
         # Best-effort fallback: no jq. Titles are free-form and may contain
         # commas/quotes, so this is inherently fragile — on any ambiguity we
         # return empty and let the caller show a title-less marker if it wants.
-        # ISO8601 sorts chronologically as text, so the max updatedAt is newest.
+        # ISO8601 sorts chronologically as text, so the max updatedAt is newest
+        # -- but only under byte-wise (C-locale) collation. bash's [[ > ]]
+        # uses the current locale's collation, which in some locales can
+        # reorder or ignore punctuation/case, silently picking the wrong
+        # "newest" session. Force C collation for this comparison specifically.
         local newest="" ts
         while IFS= read -r ts; do
-            [[ "$ts" > "$newest" ]] && newest="$ts"
+            LC_ALL=C _ac_str_lt "$newest" "$ts" && newest="$ts"
         done < <(printf '%s' "$json" | grep -oE '"updatedAt":"[^"]*"' | sed 's/"updatedAt":"//; s/"$//')
         [[ -z "$newest" ]] && return 0
         iso="$newest"

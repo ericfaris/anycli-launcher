@@ -660,6 +660,28 @@ fi
 
 rm -rf "$MIGRATION_DIR"
 
+# Regression: a failed/empty config write must not silently discard the
+# legacy file. Simulate a broken _ac_write_config (as if a disk-full or
+# permission-denied condition truncated the write) and confirm the legacy
+# file survives, so the migration can be retried on the next run. The
+# redefinition is scoped to a subshell so it never leaks into later tests
+# that call the real _ac_write_config.
+FAILWRITE_DIR=$(mktemp -d)
+cat > "$FAILWRITE_DIR/config" << 'EOF'
+PROJECTS_DIR=~/legacy-projects
+EOF
+(
+    _AC_CONFIG_FILE="$FAILWRITE_DIR/config.yaml"
+    _ac_write_config() { : > "$_AC_CONFIG_FILE"; }
+    _ac_migrate_legacy "$FAILWRITE_DIR/config"
+)
+if [[ -f "$FAILWRITE_DIR/config" && ! -f "$FAILWRITE_DIR/config.bak" ]]; then
+    printf '  \e[32m✓\e[0m migration: legacy file preserved when the new config write failed/was empty\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m migration: legacy file should survive a failed config write\n'; ((FAIL++))
+fi
+rm -rf "$FAILWRITE_DIR"
+
 # ═══════════════════════════════════════
 echo "── Version & Changelog ──"
 
@@ -784,6 +806,16 @@ if [[ "$parsed" != *"--version"* ]]; then
 else
     printf '  \e[31m✗\e[0m flags: --version should be filtered\n'; ((FAIL++))
 fi
+
+# Regression: the cache file is written atomically (temp file + mv), matching
+# the update-check cache, so a reader can never observe a half-written file.
+# Confirm the cache is populated with the right content and no stray
+# .XXXXXX temp file is left behind after a normal run.
+cache_file="${TMPDIR:-/tmp}/ac-flags-test-cli.cache"
+assert_contains "flags: cache file populated after parse" "--agent=<AGENT>" "$(cat "$cache_file" 2>/dev/null)"
+stray_tmp="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'ac-flags-test-cli.cache.??????' 2>/dev/null)"
+assert_eq "flags: no stray temp cache file left behind" "" "$stray_tmp"
+rm -f "$cache_file"
 
 # ═══════════════════════════════════════
 echo "── Regression: config menu must not hang on a slow/hanging --help ──"
@@ -4927,6 +4959,19 @@ assert_contains "sessions: written to config" 'show_sessions: "true"' "$written_
 _ac_load_config
 assert_eq "sessions: round-trip reload" "true" "$_AC_SHOW_SESSIONS"
 rm -f "$SESS_CONFIG" "$SESS_CONFIG2"
+
+# ═══════════════════════════════════════
+echo "── _ac_str_lt: locale-independent string comparison ──"
+# The no-jq session fallback compares ISO8601 timestamps as strings to find
+# the newest one, which is only correct under byte-wise (C-locale) collation.
+# _ac_str_lt exists so that comparison can be forced to C regardless of the
+# user's locale via `LC_ALL=C _ac_str_lt a b` (a bare `LC_ALL=C [[ a < b ]]`
+# is not valid bash -- [[ is a keyword, not a simple command).
+assert_eq "str-lt: a < b is true" "0" "$(LC_ALL=C _ac_str_lt "a" "b"; echo $?)"
+assert_eq "str-lt: b < a is false" "1" "$(LC_ALL=C _ac_str_lt "b" "a"; echo $?)"
+assert_eq "str-lt: equal is false" "1" "$(LC_ALL=C _ac_str_lt "a" "a"; echo $?)"
+assert_eq "str-lt: ISO8601 timestamps order chronologically" "0" \
+    "$(LC_ALL=C _ac_str_lt "2026-09-04T13:00:00Z" "2026-09-04T14:00:00Z"; echo $?)"
 
 # ═══════════════════════════════════════
 echo "── Session summary parsing ──"

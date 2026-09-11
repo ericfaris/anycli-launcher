@@ -4357,6 +4357,13 @@ ac() {
         _ac_collect_projects
         local -a all_dirs=("${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}")
         local -a dirs=()
+        # Populated while filtering below, so the render loop further down
+        # doesn't call _ac_project_label a second time per project (it's not
+        # free -- it can call _ac_lookup_alias, which itself scans every
+        # configured alias on a miss). Left empty when there's no filter, in
+        # which case the render loop's fallback computes it directly, same
+        # as before -- one call either way, never two.
+        local -A _ac_label_cache=()
         if [[ -z "$_ac_filter" ]]; then
             dirs=("${all_dirs[@]+"${all_dirs[@]}"}")
         else
@@ -4364,6 +4371,7 @@ ac() {
             for _f_dir in "${all_dirs[@]+"${all_dirs[@]}"}"; do
                 _f_base="${_f_dir##*/}"
                 _f_disp="$(_ac_project_label "$_f_dir")"
+                _ac_label_cache["$_f_dir"]="$_f_disp"
                 if [[ "$(_ac_lower "$_f_base")" == *"$_f_lower"* || "$(_ac_lower "$_f_disp")" == *"$_f_lower"* ]]; then
                     dirs+=("$_f_dir")
                 fi
@@ -4457,8 +4465,8 @@ ac() {
             local _dirname="${dir##*/}"
             local _safe_dirname
             _safe_dirname="$(_ac_safe_name "$_dirname")"
-            local _display_name
-            _display_name="$(_ac_project_label "$dir")"
+            local _display_name="${_ac_label_cache[$dir]-}"
+            [[ -n "${_ac_label_cache[$dir]+set}" ]] || _display_name="$(_ac_project_label "$dir")"
             local _git_info=""
             if [[ "${_AC_SHOW_GIT_STATUS:-false}" == "true" ]]; then
                 _git_info="$(_ac_git_summary "$dir")"

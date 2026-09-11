@@ -63,6 +63,20 @@ _ac_lower() {
     fi
 }
 
+# "Press any key to continue" — read exactly one raw keypress with no
+# newline required. Under bash, `read -n 1` does this directly. Under zsh,
+# `read -n 1` is NOT the raw-keypress equivalent -- it silently hangs waiting
+# for a newline that never comes (confirmed interactively: the keystroke
+# echoes but read never returns). zsh's actual single-raw-character read is
+# `read -k 1`.
+_ac_pause() {
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        read -k 1 -r _ac_pause_key 2>/dev/null
+    else
+        read -r -n 1 _ac_pause_key 2>/dev/null
+    fi
+}
+
 _ac_assign() {
     # Safely assign a value to a dynamically-named variable
     eval "$1=\"\$2\""
@@ -1830,7 +1844,7 @@ _ac_config_theme() {
         fi
 
         printf "\n  %sPress any key to continue...%s " "$c_dim" "$reset"
-        read -r -n 1
+        _ac_pause
     done
 }
 
@@ -1890,7 +1904,7 @@ _ac_config_theme_font() {
         if [[ -z "$settings" ]]; then
             printf "  ✗ Could not find Windows Terminal settings.json\n"
             printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-            read -r -n 1
+            _ac_pause
             return
         fi
 
@@ -1900,7 +1914,7 @@ _ac_config_theme_font() {
             printf "  \e[31m✗ Failed: Python was not found. Install Python 3 or disable the Windows Store alias\n"
             printf "    (Settings > Apps > Advanced app settings > App execution aliases).\e[0m\n"
             printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-            read -r -n 1
+            _ac_pause
             return
         fi
 
@@ -1948,7 +1962,7 @@ print("OK")
     fi
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-    read -r -n 1
+    _ac_pause
 }
 
 # Shared project picker for the config editors.
@@ -1970,7 +1984,7 @@ _ac_config_pick_project() {
     if (( ${#names[@]} == 0 )); then
         printf "\n    %s(no projects found in %s)%s\n" "$c_dim" "$_AC_PROJECTS_DIR" "$reset"
         printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-        read -r -n 1
+        _ac_pause
         return 1
     fi
 
@@ -2479,7 +2493,7 @@ _ac_show_changelog() {
     fi
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-    read -r -n 1
+    _ac_pause
 }
 
 # Help screen for the menu's less-obvious keys (session resume/picker triggers).
@@ -2511,7 +2525,7 @@ _ac_show_key_help() {
     fi
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-    read -r -n 1
+    _ac_pause
 }
 
 # --- Platform Helpers ---
@@ -3110,7 +3124,7 @@ _ac_do_update() {
         else
             printf "  %sInvalid selection%s\n" "$c_dim" "$reset"
             printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-            read -r -n 1
+            _ac_pause
             return
         fi
 
@@ -3150,7 +3164,7 @@ _ac_do_update() {
     rm -f "$_AC_UPDATE_CACHE"
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-    read -r -n 1
+    _ac_pause
 }
 
 # --- Launch history ---

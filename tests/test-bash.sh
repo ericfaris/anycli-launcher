@@ -1860,6 +1860,35 @@ if ! { [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; }
 fi
 
 # ═══════════════════════════════════════
+echo "── check-platform.sh: shares _ac_platform() instead of its own copy ──"
+
+# check-platform.sh sources anycli.bash and delegates its detect_platform()
+# to _ac_platform(), rather than maintaining a second, independently-
+# drifting copy of the same /proc/version + $MSYSTEM + `uname -s` signals.
+# Confirm the override seam is honored end-to-end through the real script
+# (not just the in-process function), for each of the four platforms.
+for _cp_plat in wsl gitbash macos linux; do
+    _cp_out="$(_AC_PLATFORM_OVERRIDE="$_cp_plat" bash "$PROJECT_DIR/tests/check-platform.sh" 2>/dev/null | sed -n '2p')"
+    case "$_cp_plat" in
+        wsl)     _cp_expected="Platform: WSL2" ;;
+        gitbash) _cp_expected="Platform: Git Bash (Windows)" ;;
+        macos)   _cp_expected="Platform: macOS" ;;
+        linux)   _cp_expected="Platform: Linux" ;;
+    esac
+    assert_eq "check-platform: reports $_cp_plat via the override seam" "$_cp_expected" "$_cp_out"
+done
+
+# Fallback: if anycli.bash isn't reachable next to it (e.g. the script was
+# copied out on its own), check-platform.sh must still run standalone rather
+# than erroring out.
+CP_STANDALONE_DIR="$(mktemp -d)"
+mkdir -p "$CP_STANDALONE_DIR/tests"
+cp "$PROJECT_DIR/tests/check-platform.sh" "$CP_STANDALONE_DIR/tests/"
+cp_standalone_out="$(bash "$CP_STANDALONE_DIR/tests/check-platform.sh" 2>&1 | sed -n '2p')"
+assert_contains "check-platform: standalone fallback still reports a platform" "Platform:" "$cp_standalone_out"
+rm -rf "$CP_STANDALONE_DIR"
+
+# ═══════════════════════════════════════
 echo "── _ac_build_wt_invocation: pure per-platform argv (no wt.exe mock needed) ──"
 
 # wsl: must invoke wsl.exe --cd with the Linux path -- and must NOT pass a UNC

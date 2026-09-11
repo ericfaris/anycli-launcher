@@ -32,19 +32,43 @@ head_line() { printf '\n%s── %s ──%s\n' "$C_DIM" "$1" "$C_RST"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # --- Platform detection -----------------------------------------------------
-detect_platform() {
-    if [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
-        echo "WSL2"
-    elif [[ "${MSYSTEM:-}" =~ ^(MINGW|MSYS|UCRT) || "$(uname -s 2>/dev/null)" == MINGW* ]]; then
-        echo "Git Bash (Windows)"
-    elif [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
-        echo "macOS"
-    elif [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
-        echo "Linux"
-    else
-        echo "unknown ($(uname -s 2>/dev/null || echo '?'))"
-    fi
-}
+# Reuses anycli.bash's own _ac_platform() (single source of truth for
+# wsl/gitbash/macos/linux detection) rather than maintaining a second copy of
+# the same /proc/version + $MSYSTEM + `uname -s` signals here, which could
+# silently drift out of sync with the launcher's own idea of the platform.
+# Sourcing is safe: this script always runs as its own `bash` process (never
+# `source`d into an interactive shell), so anycli.bash's function/variable
+# definitions never escape into anything the user is using. Falls back to a
+# standalone copy of the same three-signal detection only if anycli.bash
+# can't be found next to this script (e.g. it was copied out on its own).
+_CP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$_CP_SCRIPT_DIR/../anycli.bash" ]]; then
+    # shellcheck source=/dev/null
+    source "$_CP_SCRIPT_DIR/../anycli.bash"
+    detect_platform() {
+        case "$(_ac_platform)" in
+            wsl)     echo "WSL2" ;;
+            gitbash) echo "Git Bash (Windows)" ;;
+            macos)   echo "macOS" ;;
+            linux)   echo "Linux" ;;
+            *)       echo "unknown ($(uname -s 2>/dev/null || echo '?'))" ;;
+        esac
+    }
+else
+    detect_platform() {
+        if [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+            echo "WSL2"
+        elif [[ "${MSYSTEM:-}" =~ ^(MINGW|MSYS|UCRT) || "$(uname -s 2>/dev/null)" == MINGW* ]]; then
+            echo "Git Bash (Windows)"
+        elif [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+            echo "macOS"
+        elif [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
+            echo "Linux"
+        else
+            echo "unknown ($(uname -s 2>/dev/null || echo '?'))"
+        fi
+    }
+fi
 
 PLATFORM="$(detect_platform)"
 

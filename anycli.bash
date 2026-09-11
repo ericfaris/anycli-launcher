@@ -2231,13 +2231,28 @@ _ac_config_menu() {
     done
 }
 
+# Normalize a user-typed projects-directory path: expand a leading "~" to
+# $HOME, and (Git Bash) convert a pasted native Windows path like
+# C:\Users\me\code to its Unix form via cygpath -- bash cannot cd into a
+# backslash path. Prints the normalized path; the caller decides what to do
+# if it still doesn't exist. Shared by every prompt that accepts a
+# projects-directory path (first-run wizard, `ac setup`, the config menu).
+_ac_normalize_typed_path() {
+    local p="${1:-}"
+    case "$p" in "~"*) p="${HOME}${p#"~"}" ;; esac
+    if [[ "$p" == *\\* || "$p" =~ ^[A-Za-z]:[/\\] ]] && command -v cygpath >/dev/null 2>&1; then
+        p="$(cygpath -u "$p" 2>/dev/null || printf '%s' "$p")"
+    fi
+    printf '%s' "$p"
+}
+
 _ac_config_edit_projects_dir() {
     printf "\n  Current: %s\n" "$_AC_PROJECTS_DIR"
     printf "  New value (blank to keep): "
     local val
     read -r val
     if [[ -n "$val" ]]; then
-        case "$val" in "~"*) val="${HOME}${val#"~"}" ;; esac
+        val="$(_ac_normalize_typed_path "$val")"
         if [[ ! -d "$val" ]]; then
             printf "  Warning: directory does not exist: %s\n" "$val"
             printf "  Save anyway? (y/n): "
@@ -3816,13 +3831,7 @@ _ac_first_run_wizard() {
         if [[ -z "$typed" && -n "$_default_root" ]]; then
             typed="$_default_root"
         fi
-        case "$typed" in "~"*) typed="${HOME}${typed#"~"}" ;; esac
-        # Git Bash (Windows): a user may paste a native Windows path like
-        # C:\Users\me\code. bash cannot cd into a backslash path, so convert it
-        # to the Unix form (/c/Users/me/code) with cygpath when available.
-        if [[ "$typed" == *\\* || "$typed" =~ ^[A-Za-z]:[/\\] ]] && command -v cygpath >/dev/null 2>&1; then
-            typed="$(cygpath -u "$typed" 2>/dev/null || printf '%s' "$typed")"
-        fi
+        typed="$(_ac_normalize_typed_path "$typed")"
         [[ -z "$typed" ]] && { printf "\n  %sNo directory given — setup cancelled.%s\n" "$c_dim" "$reset"; return 1; }
         chosen_root="$typed"
     fi
@@ -3926,11 +3935,7 @@ _ac_setup() {
     local new_root
     read -r new_root || return 1
     if [[ -n "$new_root" ]]; then
-        case "$new_root" in "~"*) new_root="${HOME}${new_root#"~"}" ;; esac
-        # Git Bash: convert a native Windows path (C:\...) to Unix form.
-        if [[ "$new_root" == *\\* || "$new_root" =~ ^[A-Za-z]:[/\\] ]] && command -v cygpath >/dev/null 2>&1; then
-            new_root="$(cygpath -u "$new_root" 2>/dev/null || printf '%s' "$new_root")"
-        fi
+        new_root="$(_ac_normalize_typed_path "$new_root")"
         if [[ ! -d "$new_root" ]]; then
             printf "  %s%s does not exist. Create it? (Y/n): %s" "$c_dim" "$new_root" "$reset"
             local mk

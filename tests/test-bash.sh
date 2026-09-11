@@ -591,6 +591,43 @@ else
     printf '  \e[31m✗\e[0m tildify: result contains a stray backslash\n'; ((FAIL++))
 fi
 
+# ═══════════════════════════════════════
+echo "── Regression: _ac_normalize_typed_path (shared by wizard/setup/config-menu) ──"
+
+# Plain Unix path: passed through unchanged.
+assert_eq "normalize-path: plain unix path unchanged" "/tmp/plain" "$(_ac_normalize_typed_path "/tmp/plain")"
+
+# Leading ~: expanded to $HOME.
+assert_eq "normalize-path: ~ expands to \$HOME" "$HOME/foo" "$(_ac_normalize_typed_path "~/foo")"
+
+# Git Bash: a pasted native Windows path is converted via cygpath -u. Before
+# this was extracted into a shared helper, _ac_config_edit_projects_dir (the
+# config-menu path editor, unlike the wizard and `ac setup`) had no cygpath
+# conversion at all -- a Windows user pasting a path there got a broken
+# projects_dir. Confirm the shared helper covers all three callers.
+cat > "$MOCK_BIN/cygpath" << 'MOCK'
+#!/usr/bin/env bash
+# Simulate cygpath -u: convert C:\Users\me\code to /c/Users/me/code
+if [[ "$1" == "-u" ]]; then
+    p="${2//\\//}"
+    p="$(echo "$p" | sed -E 's#^([A-Za-z]):#/\L\1#')"
+    echo "$p"
+fi
+MOCK
+chmod +x "$MOCK_BIN/cygpath"
+assert_eq "normalize-path: Git Bash native path converted via cygpath" \
+    "/c/Users/me/code" "$(_ac_normalize_typed_path 'C:\Users\me\code')"
+rm -f "$MOCK_BIN/cygpath"
+
+# Without cygpath on PATH at all (non-Windows), a backslash-containing input
+# is returned as-is rather than erroring -- cygpath is optional everywhere
+# this is called.
+OLD_PATH_NORM="$PATH"
+PATH="$MOCK_BIN"
+assert_eq "normalize-path: no cygpath available -> input passed through" \
+    'C:\Users\me\code' "$(_ac_normalize_typed_path 'C:\Users\me\code')"
+PATH="$OLD_PATH_NORM"
+
 # Test: round-trip (write then read back)
 _AC_PROJECTS_DIR=""
 _AC_CLI_FLAGS=""

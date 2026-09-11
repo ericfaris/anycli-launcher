@@ -829,38 +829,39 @@ _ac_launch_project() {
     [[ -n "$title" ]] && wt_args+=("--title" "$title")
     [[ -n "$color" ]] && wt_args+=("--tabColor" "$color")
 
-    # Detect platform: WSL, Git Bash (MINGW/MSYS), or native Unix
-    local is_wsl="${_AC_IS_WSL:-}"
-    if [[ -z "$is_wsl" ]]; then
-        [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null && is_wsl=1 || is_wsl=0
-    fi
-
-    if [[ "$is_wsl" == "1" ]]; then
-        local distro="${WSL_DISTRO_NAME:-Ubuntu}"
-        # Do NOT pin wt.exe's --startingDirectory to a \\wsl.localhost\... UNC
-        # path: WSL cannot set its working directory to a UNC path, so wsl.exe
-        # fails with "Wsl/ERROR_PATH_NOT_FOUND" before the tab script runs.
-        # Instead pass the Linux path to `wsl.exe --cd`, which is the supported
-        # way to set a WSL invocation's working directory. The generated script
-        # also `cd`s to the project as a belt-and-braces fallback.
-        wt_args+=("wsl.exe" "-d" "$distro" "--cd" "$dir" "--" "bash" "-l" "$script_file")
-    elif [[ "${MSYSTEM:-}" =~ ^(MINGW|MSYS|UCRT) || "$(uname -s 2>/dev/null)" == MINGW* ]]; then
-        # Git Bash on native Windows — convert paths for wt.exe (Windows process)
-        # Use env to set _AC_SPAWNED_TAB BEFORE bash sources .bashrc
-        # Use -- to separate wt.exe options from the command
-        local win_script win_bash win_env win_dir
-        win_script="$(cygpath -w "$script_file" 2>/dev/null || echo "$script_file")"
-        win_bash="$(cygpath -w "$(which bash)" 2>/dev/null || echo "bash")"
-        win_env="$(cygpath -w "$(which env)" 2>/dev/null || echo "env")"
-        # Pin the starting directory to the project (Windows path) so a stale
-        # Windows Terminal default-profile startingDirectory cannot break the
-        # launch with "Could not access starting directory" (error 0x8007010b).
-        win_dir="$(cygpath -w "$dir" 2>/dev/null || true)"
-        [[ -n "$win_dir" ]] && wt_args+=("--startingDirectory" "$win_dir")
-        wt_args+=("--" "$win_env" "_AC_SPAWNED_TAB=1" "$win_bash" "-l" "$win_script")
-    else
-        wt_args+=("bash" "-l" "$script_file")
-    fi
+    # Platform-specific wt.exe invocation. See _ac_platform for the single
+    # detection seam every platform-specific branch in the file shares.
+    case "$(_ac_platform)" in
+        wsl)
+            local distro="${WSL_DISTRO_NAME:-Ubuntu}"
+            # Do NOT pin wt.exe's --startingDirectory to a \\wsl.localhost\...
+            # UNC path: WSL cannot set its working directory to a UNC path, so
+            # wsl.exe fails with "Wsl/ERROR_PATH_NOT_FOUND" before the tab
+            # script runs. Instead pass the Linux path to `wsl.exe --cd`,
+            # which is the supported way to set a WSL invocation's working
+            # directory. The generated script also `cd`s to the project as a
+            # belt-and-braces fallback.
+            wt_args+=("wsl.exe" "-d" "$distro" "--cd" "$dir" "--" "bash" "-l" "$script_file")
+            ;;
+        gitbash)
+            # Git Bash on native Windows — convert paths for wt.exe (Windows process)
+            # Use env to set _AC_SPAWNED_TAB BEFORE bash sources .bashrc
+            # Use -- to separate wt.exe options from the command
+            local win_script win_bash win_env win_dir
+            win_script="$(cygpath -w "$script_file" 2>/dev/null || echo "$script_file")"
+            win_bash="$(cygpath -w "$(command -v bash)" 2>/dev/null || echo "bash")"
+            win_env="$(cygpath -w "$(command -v env)" 2>/dev/null || echo "env")"
+            # Pin the starting directory to the project (Windows path) so a stale
+            # Windows Terminal default-profile startingDirectory cannot break the
+            # launch with "Could not access starting directory" (error 0x8007010b).
+            win_dir="$(cygpath -w "$dir" 2>/dev/null || true)"
+            [[ -n "$win_dir" ]] && wt_args+=("--startingDirectory" "$win_dir")
+            wt_args+=("--" "$win_env" "_AC_SPAWNED_TAB=1" "$win_bash" "-l" "$win_script")
+            ;;
+        *)
+            wt_args+=("bash" "-l" "$script_file")
+            ;;
+    esac
 
     "$_AC_WT_BIN" "${wt_args[@]}" 2>/dev/null &
     disown
@@ -2461,6 +2462,47 @@ _ac_show_key_help() {
 }
 
 # --- Platform Helpers ---
+
+# Single source of truth for "what platform is this". Echoes exactly one of:
+#   wsl      Windows Subsystem for Linux (Windows Terminal reached via wsl.exe)
+#   gitbash  Git Bash / MSYS2 / MSYS / UCRT on native Windows
+#   macos    macOS
+#   linux    everything else (native Linux, or an unrecognized platform)
+#
+# Real detection (the /proc/version, $MSYSTEM, and `uname -s` probes) is
+# cached in _AC_PLATFORM after the first call within a process, since it
+# can't change mid-process. Every platform-specific branch in the file
+# (new-tab launch mechanism, Windows Terminal settings.json discovery, theme
+# application) should consult this instead of re-deriving platform directly
+# -- that duplication previously meant each call site could disagree, and
+# tests had to mock three different signals (plus shadow `uname` as a
+# function) to force one code path.
+#
+# _AC_PLATFORM_OVERRIDE is the single test seam: set it to force a platform
+# without touching /proc/version, $MSYSTEM, or `uname`. It is checked BEFORE
+# the cache on every call (and is not itself cached into _AC_PLATFORM), so it
+# always wins even after real detection has already run and cached a result.
+_ac_platform() {
+    if [[ -n "${_AC_PLATFORM_OVERRIDE:-}" ]]; then
+        printf '%s' "$_AC_PLATFORM_OVERRIDE"
+        return 0
+    fi
+    if [[ -n "${_AC_PLATFORM:-}" ]]; then
+        printf '%s' "$_AC_PLATFORM"
+        return 0
+    fi
+    if [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+        _AC_PLATFORM="wsl"
+    elif [[ "${MSYSTEM:-}" =~ ^(MINGW|MSYS|UCRT) || "$(uname -s 2>/dev/null)" == MINGW* ]]; then
+        _AC_PLATFORM="gitbash"
+    elif [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+        _AC_PLATFORM="macos"
+    else
+        _AC_PLATFORM="linux"
+    fi
+    printf '%s' "$_AC_PLATFORM"
+}
+
 _ac_kiro_cli_data_dir() {
     # Resolve the kiro-cli data directory for the current platform.
     # Returns the path to stdout. Returns 1 if no valid path found.

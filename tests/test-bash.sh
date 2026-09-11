@@ -1754,6 +1754,43 @@ rm -rf "$WT_NONE_DIR"
 unset _AC_WT_BIN
 
 # ═══════════════════════════════════════
+echo "── _ac_platform: single detection seam ──"
+
+# _AC_PLATFORM_OVERRIDE must win outright, every call, regardless of what real
+# detection would otherwise find or what got cached into _AC_PLATFORM by an
+# earlier unrelated call in this same test run.
+_AC_PLATFORM="macos"   # simulate a stale cache from some earlier real detection
+_AC_PLATFORM_OVERRIDE="wsl"
+assert_eq "platform: override wins over a stale cache" "wsl" "$(_ac_platform)"
+_AC_PLATFORM_OVERRIDE="gitbash"
+assert_eq "platform: override can flip between calls" "gitbash" "$(_ac_platform)"
+unset _AC_PLATFORM _AC_PLATFORM_OVERRIDE
+
+# Real detection: caching. A pre-populated _AC_PLATFORM must be returned as-is
+# with no re-detection -- checked with a sentinel value that real detection
+# would never produce, so this can't pass by accident regardless of what OS
+# this suite happens to be running on (including WSL2, where /proc/version
+# would otherwise take precedence over any MSYSTEM/uname signal).
+_AC_PLATFORM="__cached_sentinel__"
+assert_eq "platform: a populated cache is returned without re-detecting" "__cached_sentinel__" "$(_ac_platform)"
+unset _AC_PLATFORM
+
+# Real detection: MSYSTEM is consulted and the result is cached. Skipped when
+# /proc/version already claims WSL (as it does inside this session's own WSL2
+# sandbox), since /proc/version legitimately takes precedence there and this
+# assertion is about the MSYSTEM branch specifically.
+if ! { [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; }; then
+    unset _AC_PLATFORM
+    export MSYSTEM="MINGW64"
+    first="$(_ac_platform)"
+    unset MSYSTEM
+    second="$(_ac_platform)"
+    assert_eq "platform: real detection under MSYSTEM=MINGW64" "gitbash" "$first"
+    assert_eq "platform: cached value survives the signal disappearing" "$first" "$second"
+    unset _AC_PLATFORM
+fi
+
+# ═══════════════════════════════════════
 echo "── Cross-Platform: Git Bash Detection ──"
 
 # Test: MSYSTEM=MINGW64 triggers Git Bash code path
@@ -1782,13 +1819,11 @@ _AC_PROJECTS_DIR="$GITBASH_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "gb-proj")" "#aabbcc"
 _ac_assign "_AC_PROJECT_TITLE_$(_ac_safe_name "gb-proj")" "GB Test"
 rm -f "$LK_TEST_LOG"
-export MSYSTEM="MINGW64"
-_AC_IS_WSL=0
+_AC_PLATFORM_OVERRIDE="gitbash"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$GITBASH_DIR/gb-proj" >/dev/null 2>&1 || true
 cd "$PROJECT_DIR" || true   # launching cds the shell; restore it
 sleep 0.2
-unset MSYSTEM
 if [[ -f "$LK_TEST_LOG" ]]; then
     wt_call=$(cat "$LK_TEST_LOG")
     # On Git Bash, the script path should be converted via cygpath
@@ -1801,9 +1836,13 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$MOCK_BIN/cygpath" "$LK_TEST_LOG"
 rm -rf "$GITBASH_DIR"
-unset _AC_WT_BIN
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE
 
-# Test: without MSYSTEM, non-WSL uses plain bash path (Linux/macOS)
+# Test: on a plain unix host (not WSL, not Git Bash), the launcher uses the
+# plain bash path. Forced via _AC_PLATFORM_OVERRIDE -- the single test seam
+# for platform, instead of unsetting MSYSTEM and shadowing `uname` (which
+# still wasn't enough when this suite runs for real on Git Bash for Windows,
+# where `uname -s` genuinely reports MINGW*).
 unset _AC_WT_BIN
 cat > "$MOCK_BIN/wt.exe" << 'MOCK'
 #!/usr/bin/env bash
@@ -1816,17 +1855,9 @@ mkdir -p "$UNIX_DIR/unix-proj"
 _AC_PROJECTS_DIR="$UNIX_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "unix-proj")" "#ccddee"
 rm -f "$LK_TEST_LOG"
-unset MSYSTEM
-# The launcher's git-bash detection also falls back to `uname -s` (in case
-# MSYSTEM isn't set), so unsetting MSYSTEM alone doesn't simulate a plain
-# unix host when this suite happens to be running for real on Git Bash for
-# Windows, where `uname -s` genuinely reports MINGW*. Shadow it with a
-# function for the duration of this one check.
-uname() { echo "Linux"; }
-_AC_IS_WSL=0
+_AC_PLATFORM_OVERRIDE="linux"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$UNIX_DIR/unix-proj" >/dev/null 2>&1 || true
-unset -f uname
 cd "$PROJECT_DIR" || true   # launching cds the shell; restore it
 sleep 0.2
 if [[ -f "$LK_TEST_LOG" ]]; then
@@ -1845,7 +1876,7 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$UNIX_DIR"
-unset _AC_WT_BIN _AC_IS_WSL
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE
 
 # ═══════════════════════════════════════
 echo "── Regression: WSL new-tab uses --cd, not a UNC startingDirectory ──"
@@ -1866,8 +1897,7 @@ mkdir -p "$WSL_DIR/wsl-proj"
 _AC_PROJECTS_DIR="$WSL_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "wsl-proj")" "#123456"
 rm -f "$LK_TEST_LOG"
-unset MSYSTEM
-_AC_IS_WSL=1
+_AC_PLATFORM_OVERRIDE="wsl"
 WSL_DISTRO_NAME="Ubuntu"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$WSL_DIR/wsl-proj" >/dev/null 2>&1 || true
@@ -1889,13 +1919,13 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$WSL_DIR"
-unset _AC_WT_BIN _AC_IS_WSL WSL_DISTRO_NAME
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE WSL_DISTRO_NAME
 
 # ═══════════════════════════════════════
 echo "── Cross-Platform: WSL Detection ──"
 
-# Test: WSL detection sets is_wsl based on /proc/version
-# We can't mock /proc/version easily, but we can test the _AC_IS_WSL override
+# Test: WSL detection sets platform based on /proc/version
+# We can't mock /proc/version easily, but we can test the _AC_PLATFORM_OVERRIDE
 unset _AC_WT_BIN
 cat > "$MOCK_BIN/wt.exe" << 'MOCK'
 #!/usr/bin/env bash
@@ -1908,7 +1938,7 @@ mkdir -p "$WSL_DIR/wsl-proj"
 _AC_PROJECTS_DIR="$WSL_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "wsl-proj")" "#112233"
 rm -f "$LK_TEST_LOG"
-_AC_IS_WSL=1
+_AC_PLATFORM_OVERRIDE="wsl"
 export WSL_DISTRO_NAME="Ubuntu-24.04"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$WSL_DIR/wsl-proj" >/dev/null 2>&1 || true
@@ -1924,7 +1954,7 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$WSL_DIR"
-unset _AC_WT_BIN _AC_IS_WSL WSL_DISTRO_NAME
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE WSL_DISTRO_NAME
 
 # Test: WSL_DISTRO_NAME defaults to Ubuntu when unset
 unset _AC_WT_BIN
@@ -1939,7 +1969,7 @@ mkdir -p "$WSL_DEF_DIR/wsl-def"
 _AC_PROJECTS_DIR="$WSL_DEF_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "wsl-def")" "#445566"
 rm -f "$LK_TEST_LOG"
-_AC_IS_WSL=1
+_AC_PLATFORM_OVERRIDE="wsl"
 unset WSL_DISTRO_NAME
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$WSL_DEF_DIR/wsl-def" >/dev/null 2>&1 || true
@@ -1953,7 +1983,7 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$WSL_DEF_DIR"
-unset _AC_WT_BIN _AC_IS_WSL
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE
 
 # ═══════════════════════════════════════
 echo "── Cross-Platform: Script File ──"
@@ -1974,8 +2004,7 @@ mkdir -p "$SCRIPT_DIR2/script-proj"
 _AC_PROJECTS_DIR="$SCRIPT_DIR2"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "script-proj")" "#998877"
 rm -f "$LK_TEST_LOG"
-_AC_IS_WSL=0
-unset MSYSTEM
+_AC_PLATFORM_OVERRIDE="linux"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$SCRIPT_DIR2/script-proj" >/dev/null 2>&1 || true
 cd "$PROJECT_DIR" || true   # launching cds the shell; restore it
@@ -1994,7 +2023,7 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$SCRIPT_TMP" "$SCRIPT_DIR2"
-unset TMPDIR _AC_WT_BIN _AC_IS_WSL
+unset TMPDIR _AC_WT_BIN _AC_PLATFORM_OVERRIDE
 
 # Restore simple mock
 cat > "$MOCK_BIN/kiro-cli" << 'MOCK'
@@ -3518,7 +3547,7 @@ chmod +x "$SEC_WT"
 export SEC_SCRIPT_OUT="$SEC_TMP/script-path"
 
 _AC_WT_BIN="$SEC_WT"
-_AC_IS_WSL=0
+_AC_PLATFORM_OVERRIDE="linux"
 SEC_BASE="$(basename "$EVIL_DIR")"
 _ac_assign "_AC_PROJECT_TITLE_$(_ac_safe_name "$SEC_BASE")" "T"
 TMPDIR="$SEC_TMP" _ac_launch_project "$EVIL_DIR" >/dev/null 2>&1
@@ -3547,7 +3576,7 @@ if [[ -n "$SEC_SCRIPT" ]]; then
     esac
 fi
 
-unset _AC_WT_BIN _AC_IS_WSL _AC_LAUNCHED_NEW_TAB SEC_SCRIPT_OUT
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE _AC_LAUNCHED_NEW_TAB SEC_SCRIPT_OUT
 rm -rf "$SEC_TMP"
 
 # Stale tab scripts are swept

@@ -911,8 +911,8 @@ cat > "$MOCK_BIN/noresume-cli" << 'MOCK'
 echo "NORESUME_CALLED: $*" >> "${LK_TEST_LOG:-/tmp/ac-test.log}"
 MOCK
 chmod +x "$MOCK_BIN/noresume-cli"
-# Add a flagless entry to the caps map for the duration of this test.
-_AC_CLI_CAPS+=("noresume-cli||")
+# Add a flagless entry to the CLI table for the duration of this test.
+_AC_CLIS+=("noresume-cli||||")
 _AC_CLI_TOOL="noresume-cli"
 _AC_CLI_LAUNCH=""
 rm -f "$LK_TEST_LOG"

@@ -483,7 +483,7 @@ _ac_load_config() {
     _AC_CLI_FLAGS=""
     # No privileged default CLI -- anycli launches whatever tool is
     # configured (via the first-run wizard or config.yaml's cli_tool), not
-    # one AI CLI singled out over the others in _AC_KNOWN_CLIS.
+    # one AI CLI singled out over the others in _AC_CLIS.
     _AC_CLI_TOOL=""
     _AC_CLI_LAUNCH=""
     _AC_AUTO_UPDATE_CHECK="true"
@@ -1040,49 +1040,48 @@ _ac_write_config() {
 }
 
 # --- CLI Detection and Flag Parsing ---
-_AC_KNOWN_CLIS=(
-    "kiro-cli:chat"
-    "claude:"
-    "aider:"
-    "goose:session"
-    "codex:"
-    "amp:"
-)
-
-# Per-CLI resume capabilities.
-# Format: tool | resume-flag | list-sessions-argv | picker-flag
+# Every known AI CLI, one row per tool, single source of truth for both "what
+# tools does the wizard offer" and "what can this tool do". Previously these
+# were two separate tables (_AC_KNOWN_CLIS keyed by ":", _AC_CLI_CAPS keyed by
+# "|") that had to be kept in sync by hand -- a tool added to one and not the
+# other silently lost either its default launch subcommand or its resume
+# capabilities.
+#
+# Format: tool|default-subcmd|resume-flag|list-sessions-argv|picker-flag
+#   - default-subcmd: launch subcommand offered by the setup wizard (empty = none)
 #   - resume-flag: flag to resume the most recent conversation (empty = none)
 #   - list-sessions-argv: space-separated argv to list sessions as JSON (empty = none)
 #   - picker-flag: flag to interactively pick a session to resume (empty = none)
-# Empty fields mean the tool lacks that capability; the launcher never emits an
-# unsupported flag and hides the corresponding trigger.
+# Empty capability fields mean the tool lacks that capability; the launcher
+# never emits an unsupported flag and hides the corresponding trigger.
 #
 # claude is TO-VERIFY: --continue resumes the most recent conversation per its
 # public docs, but this has not been confirmed against a local install. Its
 # list-sessions command and picker flag are unknown, so session-aware menu
 # entries and the picker are disabled for claude until verified.
-_AC_CLI_CAPS=(
-    "kiro-cli|--resume|chat --list-sessions --format json|--resume-picker"
-    "claude|--continue||"
-    "aider|||"
-    "goose|--resume||"
-    "codex|||"
-    "amp|||"
+_AC_CLIS=(
+    "kiro-cli|chat|--resume|chat --list-sessions --format json|--resume-picker"
+    "claude||--continue||"
+    "aider||||"
+    "goose|session|--resume||"
+    "codex||||"
+    "amp||||"
 )
 
-# Split a capability entry into fields. Sets _AC_CAP_FIELDS (indexed 0..3):
-# 0=tool 1=resume-flag 2=list-argv 3=picker-flag. Returns 1 if not found.
-_ac_cli_caps_fields() {
+# Split a tool's row into fields. Sets _AC_CLI_FIELDS (indexed 0..4):
+# 0=tool 1=subcmd 2=resume-flag 3=list-argv 4=picker-flag. Returns 1 if the
+# tool isn't in the table.
+_ac_cli_fields() {
     local tool="${1:-}" entry
-    _AC_CAP_FIELDS=()
-    for entry in "${_AC_CLI_CAPS[@]}"; do
+    _AC_CLI_FIELDS=()
+    for entry in "${_AC_CLIS[@]}"; do
         if [[ "${entry%%|*}" == "$tool" ]]; then
             local IFS='|'
             # zsh's `read` splits into an array with -A, not bash's -a.
             if [[ -n "${ZSH_VERSION:-}" ]]; then
-                read -rA _AC_CAP_FIELDS <<< "$entry"
+                read -rA _AC_CLI_FIELDS <<< "$entry"
             else
-                read -ra _AC_CAP_FIELDS <<< "$entry"
+                read -ra _AC_CLI_FIELDS <<< "$entry"
             fi
             return 0
         fi
@@ -1092,31 +1091,32 @@ _ac_cli_caps_fields() {
 
 # Print the resume flag for a tool, or nothing if resume is unsupported.
 _ac_cli_resume_flag() {
-    _ac_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_AC_CAP_FIELDS[1]:-}"
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[2]:-}"
     return 0
 }
 
 # Print the list-sessions argv (space-separated) for a tool, or nothing if the
 # tool has no session-listing capability.
 _ac_cli_list_argv() {
-    _ac_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_AC_CAP_FIELDS[2]:-}"
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[3]:-}"
     return 0
 }
 
 # Print the picker flag for a tool, or nothing if the tool has no session picker.
 _ac_cli_picker_flag() {
-    _ac_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_AC_CAP_FIELDS[3]:-}"
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[4]:-}"
     return 0
 }
 
 _ac_detect_clis() {
     # Returns list of available CLI tools on PATH
     local -a found=()
-    for entry in "${_AC_KNOWN_CLIS[@]}"; do
-        local tool="${entry%%:*}"
+    local entry
+    for entry in "${_AC_CLIS[@]}"; do
+        local tool="${entry%%|*}"
         if command -v "$tool" &>/dev/null; then
             found+=("$tool")
         fi
@@ -1126,15 +1126,8 @@ _ac_detect_clis() {
 
 _ac_get_default_launch() {
     # Get the default launch subcommand for a tool
-    local tool="$1"
-    for entry in "${_AC_KNOWN_CLIS[@]}"; do
-        local t="${entry%%:*}"
-        local subcmd="${entry#*:}"
-        if [[ "$t" == "$tool" ]]; then
-            echo "$subcmd"
-            return
-        fi
-    done
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[1]:-}"
 }
 
 _ac_parse_cli_flags() {

@@ -4186,6 +4186,172 @@ _ac_launch_by_name() {
     return $?
 }
 
+# Render the full interactive menu (header, project list, footer) to stdout.
+# Extracted out of ac()'s ~150-line inline render block so the two concerns
+# -- "what does the menu look like" and "how do we dispatch a keypress" --
+# aren't interleaved in one function.
+#
+# This is NOT a standalone, independently-callable renderer: like several
+# other helpers in this file (e.g. _ac_doctor_pass inside _ac_doctor), it
+# relies on bash's dynamic scoping of `local` variables to read the caller's
+# in-progress state directly rather than taking it as parameters --
+# specifically `dirs` (the filtered project list), `_ac_filter`, and
+# `_ac_label_cache` (all declared `local` in ac()'s while loop before this is
+# called). It must only ever be called from inside that loop.
+#
+# Writes to the caller's `index` (declared `local` in ac() before the call,
+# left undeclared here so bash's dynamic scoping resolves it to that
+# variable rather than shadowing it) -- one past the last valid selection
+# number, needed by ac()'s bounds checks after the prompt returns.
+_ac_render_menu() {
+    # Colors
+    local reset=$'\e[0m'
+    local c_title=$'\e[1;36m'
+    local c_dim=$'\e[2m'
+    local c_num=$'\e[1;33m'
+    local c_name=$'\e[0;37m'
+    local c_prompt=$'\e[1;32m'
+    local c_accent=$'\e[0;36m'
+    local c_update=$'\e[1;33m'
+
+    _ac_clear
+
+    # Display menu
+    printf "\n"
+    printf "  %s╭─────────────────────────────────────╮%s\n" "$c_title" "$reset"
+    local _ac_hdr="anycli"
+    local _ac_ver="v$_AC_VERSION"
+    local _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
+    printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
+    # Show CLI tool version on second line
+    if [[ -z "${_AC_CLI_VERSION_CACHED:-}" ]]; then
+        _AC_CLI_VERSION_CACHED="$($_AC_CLI_TOOL --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")"
+    fi
+    if [[ -n "$_AC_CLI_VERSION_CACHED" ]]; then
+        local _cli_label="$_AC_CLI_TOOL $_AC_CLI_VERSION_CACHED"
+        local _cli_pad=$(( 37 - 2 - ${#_cli_label} - 2 ))
+        printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
+            "$c_title" "$reset" "$c_dim" "$_cli_label" "$_cli_pad" "" "$reset" "$c_title" "$reset"
+    fi
+    if _ac_update_available; then
+        local _ac_update_msg=""
+        if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+            if [[ -n "$_AC_CLI_LATEST_VERSION" ]]; then
+                _ac_update_msg="$_AC_CLI_TOOL ${_AC_CLI_LATEST_VERSION}"
+            else
+                _ac_update_msg="$_AC_CLI_TOOL"
+            fi
+        fi
+        if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+            if [[ -n "$_ac_update_msg" ]]; then
+                _ac_update_msg="${_ac_update_msg} + launcher"
+            else
+                _ac_update_msg="launcher"
+            fi
+        fi
+        if [[ "${_AC_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+            local _app_count
+            _app_count=$(wc -w <<< "$_AC_APPS_UPDATE_LIST")
+            if [[ -n "$_ac_update_msg" ]]; then
+                _ac_update_msg="${_ac_update_msg} + ${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
+            else
+                _ac_update_msg="${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
+            fi
+        fi
+        local _update_label="⬆ ${_ac_update_msg} available"
+        local _upd_pad=$(( 37 - 2 - ${#_update_label} - 2 ))
+        printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
+            "$c_title" "$reset" "$c_update" "$_update_label" "$_upd_pad" "" "$reset" "$c_title" "$reset"
+    fi
+    printf "  %s╰─────────────────────────────────────╯%s\n" "$c_title" "$reset"
+
+    printf "\n"
+
+    index=1
+
+    # Entry 1: terminal (cd only)
+    printf "   %s%2d%s  %s● %s%s\n" "$c_num" "$index" "$reset" "$c_accent" "terminal" "$reset"
+    ((index++))
+
+    # Entry 2: root (cd + kiro)
+    local _root_base="${_AC_PROJECTS_DIR%/}"
+    printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "${_root_base##*/}" "$reset"
+    ((index++))
+
+    if [[ -n "$_ac_filter" ]]; then
+        printf "   %s%s%s  %sfilter: %s%s  %s(/ to clear)%s\n" \
+            "$c_dim" "──" "$reset" "$c_accent" "$_ac_filter" "$reset" "$c_dim" "$reset"
+        if (( ${#dirs[@]} == 0 )); then
+            printf "   %sno projects match%s\n" "$c_dim" "$reset"
+        fi
+    fi
+
+    # Entry 3+: projects
+    local dir
+    for dir in "${dirs[@]+"${dirs[@]}"}"; do
+        local _dirname="${dir##*/}"
+        local _safe_dirname
+        _safe_dirname="$(_ac_safe_name "$_dirname")"
+        local _display_name="${_ac_label_cache[$dir]-}"
+        [[ -n "${_ac_label_cache[$dir]+set}" ]] || _display_name="$(_ac_project_label "$dir")"
+        local _git_info=""
+        if [[ "${_AC_SHOW_GIT_STATUS:-false}" == "true" ]]; then
+            _git_info="$(_ac_git_summary "$dir")"
+        fi
+        local _app_ver="" _app_has_update=""
+        # Check if this project is a tracked app and get its version
+        local _app_name _app_path
+        for _app_name in "${_AC_TRACKED_APP_NAMES[@]+"${_AC_TRACKED_APP_NAMES[@]}"}"; do
+            _app_path="$(_ac_app_field "$_app_name" path)"
+            if [[ -n "$_app_path" && ( "$_app_path" == "$dir" || "$_app_path" == "${dir%/}" ) ]]; then
+                _app_ver=$(_ac_app_version "$_app_name")
+                # Check if this app has an update available
+                if [[ " ${_AC_APPS_UPDATE_LIST:-} " == *" $_app_name "* ]]; then
+                    _app_has_update=1
+                fi
+                break
+            fi
+        done
+        local _git_suffix=""
+        [[ -n "$_git_info" ]] && _git_suffix="$(printf "  %s%s%s" "$c_dim" "$_git_info" "$reset")"
+        # Session suffix: last-session marker + title + age, opt-in and cached.
+        local _session_suffix=""
+        if [[ "${_AC_SHOW_SESSIONS:-false}" == "true" ]]; then
+            local _sess_info
+            _sess_info="$(_ac_session_suffix "$dir")"
+            [[ -n "$_sess_info" ]] && _session_suffix="$(printf "  %s%s%s" "$c_dim" "$_sess_info" "$reset")"
+        fi
+        if [[ -n "$_app_ver" && -n "$_app_has_update" ]]; then
+            printf "   %s%2d%s  %s%s%s  %sv%s%s  %s⬆%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$c_dim" "$_app_ver" "$reset" "$c_update" "$reset" "$_git_suffix" "$_session_suffix"
+        elif [[ -n "$_app_ver" ]]; then
+            printf "   %s%2d%s  %s%s%s  %sv%s%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$c_dim" "$_app_ver" "$reset" "$_git_suffix" "$_session_suffix"
+        else
+            printf "   %s%2d%s  %s%s%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$_git_suffix" "$_session_suffix"
+        fi
+        ((index++))
+    done
+
+    # Footer options
+    printf "\n"
+    # A "?" help key is offered only when the configured CLI supports the
+    # session triggers, so the help screen always has something to show.
+    local _help_key=""
+    if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" || -n "$(_ac_cli_picker_flag "$_AC_CLI_TOOL")" ]]; then
+        _help_key="$(printf "   %s ?%s  help" "$c_num" "$reset")"
+    fi
+    if _ac_update_available; then
+        printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s q%s  quit%s\n" \
+            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
+    else
+        printf "   %s c%s  config    %s v%s  changelog   %s q%s  quit%s    %s(type to filter)%s\n" \
+            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key" "$c_dim" "$reset"
+    fi
+    # Session triggers (r<N> resume, p<N> pick) are documented behind the
+    # "?" help key rather than shown inline, to keep the menu uncluttered.
+
+    printf "\n  %s›%s " "$c_prompt" "$reset"
+}
+
 ac() {
     # zsh compatibility: scope bash-flavored option semantics (0-based arrays,
     # bash-style $BASH_REMATCH capture indexing, etc.) to this call tree only.
@@ -4354,151 +4520,12 @@ ac() {
             done
         fi
 
-        # Colors
-        local reset=$'\e[0m'
-        local c_title=$'\e[1;36m'
-        local c_dim=$'\e[2m'
-        local c_num=$'\e[1;33m'
-        local c_name=$'\e[0;37m'
-        local c_prompt=$'\e[1;32m'
-        local c_accent=$'\e[0;36m'
-        local c_update=$'\e[1;33m'
-
-        _ac_clear
-
-        # Display menu
-        printf "\n"
-        printf "  %s╭─────────────────────────────────────╮%s\n" "$c_title" "$reset"
-        local _ac_hdr="anycli"
-        local _ac_ver="v$_AC_VERSION"
-        local _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
-        printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
-        # Show CLI tool version on second line
-        if [[ -z "${_AC_CLI_VERSION_CACHED:-}" ]]; then
-            _AC_CLI_VERSION_CACHED="$($_AC_CLI_TOOL --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")"
-        fi
-        if [[ -n "$_AC_CLI_VERSION_CACHED" ]]; then
-            local _cli_label="$_AC_CLI_TOOL $_AC_CLI_VERSION_CACHED"
-            local _cli_pad=$(( 37 - 2 - ${#_cli_label} - 2 ))
-            printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
-                "$c_title" "$reset" "$c_dim" "$_cli_label" "$_cli_pad" "" "$reset" "$c_title" "$reset"
-        fi
-        if _ac_update_available; then
-            local _ac_update_msg=""
-            if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                if [[ -n "$_AC_CLI_LATEST_VERSION" ]]; then
-                    _ac_update_msg="$_AC_CLI_TOOL ${_AC_CLI_LATEST_VERSION}"
-                else
-                    _ac_update_msg="$_AC_CLI_TOOL"
-                fi
-            fi
-            if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                if [[ -n "$_ac_update_msg" ]]; then
-                    _ac_update_msg="${_ac_update_msg} + launcher"
-                else
-                    _ac_update_msg="launcher"
-                fi
-            fi
-            if [[ "${_AC_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                local _app_count
-                _app_count=$(wc -w <<< "$_AC_APPS_UPDATE_LIST")
-                if [[ -n "$_ac_update_msg" ]]; then
-                    _ac_update_msg="${_ac_update_msg} + ${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
-                else
-                    _ac_update_msg="${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
-                fi
-            fi
-            local _update_label="⬆ ${_ac_update_msg} available"
-            local _upd_pad=$(( 37 - 2 - ${#_update_label} - 2 ))
-            printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
-                "$c_title" "$reset" "$c_update" "$_update_label" "$_upd_pad" "" "$reset" "$c_title" "$reset"
-        fi
-        printf "  %s╰─────────────────────────────────────╯%s\n" "$c_title" "$reset"
-
-        printf "\n"
-
-        local index=1
-
-        # Entry 1: terminal (cd only)
-        printf "   %s%2d%s  %s● %s%s\n" "$c_num" "$index" "$reset" "$c_accent" "terminal" "$reset"
-        ((index++))
-
-        # Entry 2: root (cd + kiro)
-        local _root_base="${_AC_PROJECTS_DIR%/}"
-        printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "${_root_base##*/}" "$reset"
-        ((index++))
-
-        if [[ -n "$_ac_filter" ]]; then
-            printf "   %s%s%s  %sfilter: %s%s  %s(/ to clear)%s\n" \
-                "$c_dim" "──" "$reset" "$c_accent" "$_ac_filter" "$reset" "$c_dim" "$reset"
-            if (( ${#dirs[@]} == 0 )); then
-                printf "   %sno projects match%s\n" "$c_dim" "$reset"
-            fi
-        fi
-
-        # Entry 3+: projects
-        for dir in "${dirs[@]+"${dirs[@]}"}"; do
-            local _dirname="${dir##*/}"
-            local _safe_dirname
-            _safe_dirname="$(_ac_safe_name "$_dirname")"
-            local _display_name="${_ac_label_cache[$dir]-}"
-            [[ -n "${_ac_label_cache[$dir]+set}" ]] || _display_name="$(_ac_project_label "$dir")"
-            local _git_info=""
-            if [[ "${_AC_SHOW_GIT_STATUS:-false}" == "true" ]]; then
-                _git_info="$(_ac_git_summary "$dir")"
-            fi
-            local _app_ver="" _app_has_update=""
-            # Check if this project is a tracked app and get its version
-            local _app_name _app_path
-            for _app_name in "${_AC_TRACKED_APP_NAMES[@]+"${_AC_TRACKED_APP_NAMES[@]}"}"; do
-                _app_path="$(_ac_app_field "$_app_name" path)"
-                if [[ -n "$_app_path" && ( "$_app_path" == "$dir" || "$_app_path" == "${dir%/}" ) ]]; then
-                    _app_ver=$(_ac_app_version "$_app_name")
-                    # Check if this app has an update available
-                    if [[ " ${_AC_APPS_UPDATE_LIST:-} " == *" $_app_name "* ]]; then
-                        _app_has_update=1
-                    fi
-                    break
-                fi
-            done
-            local _git_suffix=""
-            [[ -n "$_git_info" ]] && _git_suffix="$(printf "  %s%s%s" "$c_dim" "$_git_info" "$reset")"
-            # Session suffix: last-session marker + title + age, opt-in and cached.
-            local _session_suffix=""
-            if [[ "${_AC_SHOW_SESSIONS:-false}" == "true" ]]; then
-                local _sess_info
-                _sess_info="$(_ac_session_suffix "$dir")"
-                [[ -n "$_sess_info" ]] && _session_suffix="$(printf "  %s%s%s" "$c_dim" "$_sess_info" "$reset")"
-            fi
-            if [[ -n "$_app_ver" && -n "$_app_has_update" ]]; then
-                printf "   %s%2d%s  %s%s%s  %sv%s%s  %s⬆%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$c_dim" "$_app_ver" "$reset" "$c_update" "$reset" "$_git_suffix" "$_session_suffix"
-            elif [[ -n "$_app_ver" ]]; then
-                printf "   %s%2d%s  %s%s%s  %sv%s%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$c_dim" "$_app_ver" "$reset" "$_git_suffix" "$_session_suffix"
-            else
-                printf "   %s%2d%s  %s%s%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$_git_suffix" "$_session_suffix"
-            fi
-            ((index++))
-        done
-
-        # Footer options
-        printf "\n"
-        # A "?" help key is offered only when the configured CLI supports the
-        # session triggers, so the help screen always has something to show.
-        local _help_key=""
-        if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" || -n "$(_ac_cli_picker_flag "$_AC_CLI_TOOL")" ]]; then
-            _help_key="$(printf "   %s ?%s  help" "$c_num" "$reset")"
-        fi
-        if _ac_update_available; then
-            printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s q%s  quit%s\n" \
-                "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
-        else
-            printf "   %s c%s  config    %s v%s  changelog   %s q%s  quit%s    %s(type to filter)%s\n" \
-                "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key" "$c_dim" "$reset"
-        fi
-        # Session triggers (r<N> resume, p<N> pick) are documented behind the
-        # "?" help key rather than shown inline, to keep the menu uncluttered.
-
-        printf "\n  %s›%s " "$c_prompt" "$reset"
+        local index
+        # Declared here (not just inside _ac_render_menu) because the
+        # timeout message below still needs them after the render call
+        # returns and its own copies of these have gone out of scope.
+        local reset=$'\e[0m' c_dim=$'\e[2m'
+        _ac_render_menu
 
         # Read input, with an idle timeout
         local key read_rc=0

@@ -3167,6 +3167,51 @@ PATH="$OLD_PATH_PY"
 rm -f "$MOCK_BIN/python"
 
 # ═══════════════════════════════════════
+echo "── Regression: WT prereqs failure message is bare (no double \"Failed:\") ──"
+# _ac_apply_theme_windows and _ac_reset_theme_windows are always invoked as
+# `result=$(... 2>&1)` by _ac_config_theme, which wraps whatever they print
+# in its own "✗ Failed: %s". Before _ac_wt_prereqs_fail_msg existed,
+# _ac_apply_theme_windows's own Python-missing message already contained
+# "✗ Failed:", so a real failure rendered as "✗ Failed:   ✗ Failed: ...".
+# The shared message must be bare: no leading "✗", no "Failed:", no color
+# escape -- callers that display it directly (_ac_config_theme_font) add
+# their own wrapper instead.
+_AC_WT_SETTINGS_MISSING=1
+_AC_WT_PYTHON_MISSING=""
+settings_msg="$(_ac_wt_prereqs_fail_msg)"
+if [[ "$settings_msg" != *'Failed'* && "$settings_msg" != *'✗'* && "$settings_msg" != *$'\e['* ]]; then
+    printf '  \e[32m✓\e[0m wt-prereqs-msg: settings-missing message is bare\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-prereqs-msg: settings-missing message should be bare\n    actual: %s\n' "$settings_msg"; ((FAIL++))
+fi
+assert_contains "wt-prereqs-msg: settings-missing names the file" "settings.json" "$settings_msg"
+
+_AC_WT_SETTINGS_MISSING=""
+_AC_WT_PYTHON_MISSING=1
+python_msg="$(_ac_wt_prereqs_fail_msg)"
+if [[ "$python_msg" != *'Failed'* && "$python_msg" != *'✗'* && "$python_msg" != *$'\e['* ]]; then
+    printf '  \e[32m✓\e[0m wt-prereqs-msg: python-missing message is bare\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-prereqs-msg: python-missing message should be bare\n    actual: %s\n' "$python_msg"; ((FAIL++))
+fi
+assert_contains "wt-prereqs-msg: python-missing names Python" "Python" "$python_msg"
+unset _AC_WT_SETTINGS_MISSING _AC_WT_PYTHON_MISSING
+
+# End-to-end: force settings detection to fail (stubbed in a subshell so the
+# real _ac_detect_wt_settings is untouched afterward -- this must not depend
+# on the test machine happening to have no real Windows Terminal settings
+# reachable, which would make _ac_apply_theme_windows write to a real
+# settings.json instead of exercising the failure path at all).
+(
+    _ac_detect_wt_settings() { printf ''; }
+    apply_fail="$(_ac_apply_theme_windows "${_AC_THEMES[1]}" 2>&1)"
+    wrapped="  ✗ Failed: ${apply_fail}"
+    failed_count=$(grep -o 'Failed:' <<< "$wrapped" | wc -l | tr -d ' ')
+    [[ "$failed_count" == "1" ]]
+)
+assert_exit "wt-prereqs-msg: end-to-end wrap has exactly one \"Failed:\"" 0 "$?"
+
+# ═══════════════════════════════════════
 echo "── Theme: Default Entry ──"
 
 # Test: Default theme is first in the themes array

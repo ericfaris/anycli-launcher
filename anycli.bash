@@ -1550,6 +1550,54 @@ def profile_key(profile, index):
 # restores what the user had rather than deleting the field outright.
 _AC_WT_SCHEME_BACKUP="${HOME}/.config/anycli/wt-schemes.json"
 
+# Detect the two prerequisites every Windows Terminal settings.json mutation
+# needs: the settings file itself, and a working Python interpreter to edit
+# it with. On success sets _AC_WT_SETTINGS / _AC_WT_PYTHON and returns 0. On
+# failure returns 1 and sets exactly one of _AC_WT_SETTINGS_MISSING /
+# _AC_WT_PYTHON_MISSING so the caller can report which one -- callers differ
+# in what they do after a failure (some just return, the font/opacity editor
+# shows a "press any key" prompt first), so this only detects; it prints
+# nothing itself. Pair with _ac_wt_prereqs_fail_msg for the standard message.
+_ac_wt_prereqs() {
+    _AC_WT_SETTINGS=""
+    _AC_WT_PYTHON=""
+    _AC_WT_SETTINGS_MISSING=""
+    _AC_WT_PYTHON_MISSING=""
+    _AC_WT_SETTINGS="$(_ac_detect_wt_settings)"
+    if [[ -z "$_AC_WT_SETTINGS" ]]; then
+        _AC_WT_SETTINGS_MISSING=1
+        return 1
+    fi
+    _AC_WT_PYTHON="$(_ac_find_python)"
+    if [[ -z "$_AC_WT_PYTHON" ]]; then
+        _AC_WT_PYTHON_MISSING=1
+        return 1
+    fi
+    return 0
+}
+
+# Print the bare (uncolored, unprefixed) description of whichever
+# _ac_wt_prereqs check just failed. Deliberately bare, not "✗ Failed: ...":
+# _ac_apply_theme_windows and _ac_reset_theme_windows are always invoked as
+# `result=$(... 2>&1)` by _ac_config_theme, which itself prints
+# "✗ Failed: %s" around whatever they produced -- a caller-supplied "✗
+# Failed:" here would double up into "✗ Failed:   ✗ Failed: ...", which is
+# in fact what _ac_apply_theme_windows's Python-missing message used to
+# print before this was unified. Callers that display the message directly
+# instead of returning it for another layer to wrap (_ac_config_theme_font)
+# add their own "✗ Failed: %s" around the captured text, matching the same
+# visual result.
+# Must be called right after a failing _ac_wt_prereqs, before either
+# _AC_WT_SETTINGS_MISSING or _AC_WT_PYTHON_MISSING is overwritten.
+_ac_wt_prereqs_fail_msg() {
+    if [[ -n "$_AC_WT_SETTINGS_MISSING" ]]; then
+        printf "Could not find Windows Terminal settings.json\n"
+    else
+        printf "Python was not found. Install Python 3 or disable the Windows Store alias\n"
+        printf "    (Settings > Apps > Advanced app settings > App execution aliases)."
+    fi
+}
+
 _ac_apply_theme_windows() {
     # Apply theme to Windows Terminal settings.json
     local theme_entry="$1"
@@ -1559,21 +1607,12 @@ _ac_apply_theme_windows() {
     fg=$(_ac_theme_field "$theme_entry" 2)
     cursor=$(_ac_theme_field "$theme_entry" 3)
 
-    local settings
-    settings=$(_ac_detect_wt_settings)
-    if [[ -z "$settings" ]]; then
-        printf "  ✗ Could not find Windows Terminal settings.json\n"
-        return 1
-    fi
-
     # Build the color scheme JSON using python (available in WSL and Git Bash)
-    local python_bin
-    python_bin=$(_ac_find_python)
-    if [[ -z "$python_bin" ]]; then
-        printf "  \e[31m✗ Failed: Python was not found. Install Python 3 or disable the Windows Store alias\n"
-        printf "    (Settings > Apps > Advanced app settings > App execution aliases).\e[0m\n"
+    if ! _ac_wt_prereqs; then
+        _ac_wt_prereqs_fail_msg
         return 1
     fi
+    local settings="$_AC_WT_SETTINGS" python_bin="$_AC_WT_PYTHON"
     mkdir -p "$(dirname "$_AC_WT_SCHEME_BACKUP")"
     "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]
@@ -1634,20 +1673,11 @@ print("OK:" + name)
 
 _ac_reset_theme_windows() {
     # Remove custom colorScheme from Windows Terminal, restoring defaults
-    local settings
-    settings=$(_ac_detect_wt_settings)
-    if [[ -z "$settings" ]]; then
-        printf "Could not find Windows Terminal settings.json"
+    if ! _ac_wt_prereqs; then
+        _ac_wt_prereqs_fail_msg
         return 1
     fi
-
-    local python_bin
-    python_bin=$(_ac_find_python)
-    if [[ -z "$python_bin" ]]; then
-        printf "Python was not found. Install Python 3 or disable the Windows Store alias\n"
-        printf "    (Settings > Apps > Advanced app settings > App execution aliases)."
-        return 1
-    fi
+    local settings="$_AC_WT_SETTINGS" python_bin="$_AC_WT_PYTHON"
     "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]
 scheme_backup_path = sys.argv[2]
@@ -1915,24 +1945,13 @@ _ac_config_theme_font() {
 
     # Apply via python
     if [[ -n "$selected_font" || -n "$opacity_val" ]]; then
-        local settings
-        settings=$(_ac_detect_wt_settings)
-        if [[ -z "$settings" ]]; then
-            printf "  ✗ Could not find Windows Terminal settings.json\n"
+        if ! _ac_wt_prereqs; then
+            printf "  \e[31m✗ Failed: %s\e[0m\n" "$(_ac_wt_prereqs_fail_msg)"
             printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
             _ac_pause
             return
         fi
-
-        local python_bin
-        python_bin=$(_ac_find_python)
-        if [[ -z "$python_bin" ]]; then
-            printf "  \e[31m✗ Failed: Python was not found. Install Python 3 or disable the Windows Store alias\n"
-            printf "    (Settings > Apps > Advanced app settings > App execution aliases).\e[0m\n"
-            printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-            _ac_pause
-            return
-        fi
+        local settings="$_AC_WT_SETTINGS" python_bin="$_AC_WT_PYTHON"
 
         "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]

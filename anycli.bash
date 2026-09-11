@@ -30,14 +30,28 @@ _ac_vars_with_prefix() {
 # Read the value of the variable named "$1" — a portable stand-in for bash's
 # ${!1} indirect expansion, which zsh's parser rejects outright (no amount of
 # `emulate -L bash` teaches it that syntax; eval is the only common ground).
+#
+# This is the hottest primitive in the file (every flag/color/title/prompt/
+# alias/app-field read goes through it, several times per project per menu
+# render), so the bash branch uses bash's own ${!1} indirect expansion
+# directly rather than eval — no subshell, no string-parsing a second script.
+# zsh still needs eval; it has no equivalent syntax at all.
 _ac_indirect() {
-    local _ac_ind_val
-    eval "_ac_ind_val=\"\${$1:-}\""
-    printf '%s' "$_ac_ind_val"
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        local _ac_ind_val
+        eval "_ac_ind_val=\"\${$1:-}\""
+        printf '%s' "$_ac_ind_val"
+    else
+        printf '%s' "${!1:-}"
+    fi
 }
 
 _ac_indirect_set() {
-    eval "[[ -n \"\${$1+set}\" ]]"
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        eval "[[ -n \"\${$1+set}\" ]]"
+    else
+        [[ -n "${!1+set}" ]]
+    fi
 }
 
 # Print the keys of the associative array named "$1", one per line — a
@@ -64,8 +78,14 @@ _ac_lower() {
 }
 
 _ac_assign() {
-    # Safely assign a value to a dynamically-named variable
-    eval "$1=\"\$2\""
+    # Safely assign a value to a dynamically-named variable. Under bash,
+    # printf -v does this without eval (no subshell, no re-parsing a second
+    # script); zsh's printf lacks -v, so it keeps the eval form.
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        eval "$1=\"\$2\""
+    else
+        printf -v "$1" '%s' "$2"
+    fi
 }
 
 # Map a project name to a variable-name suffix.
@@ -411,6 +431,15 @@ _ac_yaml_unquote() {
     printf '%s' "$v"
 }
 
+# Portable mtime (epoch seconds) of a file, or "" if it doesn't exist. Used by
+# hot loops to skip a redundant _ac_load_config (full YAML re-parse + legacy
+# migration scan) when the config file hasn't changed since it was last read.
+_ac_file_mtime() {
+    local f="${1:-}"
+    [[ -f "$f" ]] || { printf ''; return 0; }
+    stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || printf '0'
+}
+
 _ac_load_config() {
     # Defaults
     _AC_PROJECTS_DIR="${HOME}/projects"
@@ -681,10 +710,9 @@ _ac_get_flags() {
 }
 
 _ac_launch_project() {
-    local dir="$1"
+    local dir="${1%/}"
     local resume="${2:-}"
-    local dirname
-    dirname="$(basename "$dir")"
+    local dirname="${dir##*/}"
     # Track usage so the menu can offer recency ordering
     _ac_record_launch "$dirname"
     local safe
@@ -773,7 +801,7 @@ _ac_launch_project() {
         fi
     fi
     _ac_split_flags "$flags"
-    launch_argv+=("${_AC_FLAG_ARGV[@]}")
+    launch_argv+=("${_AC_FLAG_ARGV[@]+"${_AC_FLAG_ARGV[@]}"}")
     [[ -n "$prompt" ]] && launch_argv+=("$prompt")
 
     {
@@ -2053,8 +2081,20 @@ _ac_config_edit_project_style() {
 
 # --- Config Submenu ---
 _ac_config_menu() {
+    local _ac_cfg_mtime="" _ac_cfg_loaded=0 _ac_cfg_mtime_now
     while true; do
-        _ac_load_config
+        # Skip the reload (full YAML re-parse + legacy migration scan) when
+        # the config file hasn't changed since last read -- most submenu
+        # actions already updated these variables directly before writing, so
+        # re-reading from disk right after is redundant; this only re-reads
+        # when something (a submenu write, or an external edit) actually
+        # touched the file.
+        _ac_cfg_mtime_now="$(_ac_file_mtime "$_AC_CONFIG_FILE")"
+        if (( ! _ac_cfg_loaded )) || [[ "$_ac_cfg_mtime_now" != "$_ac_cfg_mtime" ]]; then
+            _ac_load_config
+            _ac_cfg_mtime="$_ac_cfg_mtime_now"
+            _ac_cfg_loaded=1
+        fi
         _ac_clear
 
         local reset=$'\e[0m'
@@ -3134,7 +3174,7 @@ _ac_sort_projects_by_recent() {
         [[ -n "$line" ]] && sorted+=("${line#*$'\t'}")
     done < <(
         for dir in "${_AC_PROJECT_DIRS[@]}"; do
-            base="$(basename "$dir")"
+            base="${dir##*/}"
             ts="$(_ac_recent_field "$base" ts)"
             printf '%020d\t%s\n' "$ts" "$dir"
         done | sort -t$'\t' -k1,1nr -k2,2
@@ -3284,7 +3324,7 @@ declare -gA _AC_SESSION_CACHE 2>/dev/null || declare -A _AC_SESSION_CACHE
 _ac_session_cached() {
     local dir="${1:-}" safe
     [[ -n "$dir" ]] || return 0
-    safe="$(_ac_safe_name "$(basename "$dir")")"
+    safe="$(_ac_safe_name "${dir##*/}")"
     if [[ -z "${_AC_SESSION_CACHE[$safe]+set}" ]]; then
         local summary
         summary="$(_ac_session_summary "$dir")"
@@ -3467,18 +3507,18 @@ _ac_lookup_alias() {
 # for a project nested under a grouping folder, where the group is included so
 # that work/api and personal/api stay distinguishable.
 _ac_project_label() {
-    local dir="${1:-}" base parent alias_val
-    base="$(basename "$dir")"
+    local dir="${1%/}" base parent alias_val
+    base="${dir##*/}"
     alias_val="$(_ac_lookup_alias "$base")"
     if [[ -n "$alias_val" ]]; then
         printf '%s' "$alias_val"
         return 0
     fi
-    parent="$(dirname "$dir")"
+    parent="${dir%/*}"
     if _ac_is_project_root "$parent"; then
         printf '%s' "$base"
     else
-        printf '%s/%s' "$(basename "$parent")" "$base"
+        printf '%s/%s' "${parent##*/}" "$base"
     fi
     return 0
 }
@@ -3513,7 +3553,7 @@ _ac_resolve_project() {
 
     local label l_lower
     for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
-        base="$(basename "$dir")"
+        base="${dir##*/}"
         disp="$(_ac_display_name "$base")"
         label="$(_ac_project_label "$dir")"
         b_lower="$(_ac_lower "$base")"
@@ -3551,7 +3591,7 @@ _ac_project_exists_exact() {
     local query="${1:-}" dir base
     _ac_collect_projects
     for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
-        base="$(basename "$dir")"
+        base="${dir##*/}"
         if [[ "$base" == "$query" || "$(_ac_display_name "$base")" == "$query" ]]; then
             return 0
         fi
@@ -3971,7 +4011,7 @@ _ac_list_projects() {
     _ac_collect_projects
     local dir base disp
     for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
-        base="$(basename "$dir")"
+        base="${dir##*/}"
         disp="$(_ac_project_label "$dir")"
         if [[ "$disp" == "$base" ]]; then
             printf '%s\n' "$base"
@@ -4126,9 +4166,23 @@ ac() {
     local _ac_checked_updates=0
     # Active name filter, so long project lists stay navigable
     local _ac_filter=""
+    local _ac_cfg_mtime="" _ac_cfg_loaded=0 _ac_cfg_mtime_now
 
     while true; do
-        _ac_load_config
+        # Skip the reload (full YAML re-parse + legacy migration scan) when
+        # the config file hasn't changed since last read. Without this, every
+        # keystroke that returns to this loop -- most commonly typing a
+        # filter character -- re-parsed the entire config from scratch even
+        # though nothing on disk changed. A submenu that does change the
+        # config (e.g. the config menu) always writes the file, which bumps
+        # its mtime and triggers a reload here on return, so in-memory state
+        # never goes stale.
+        _ac_cfg_mtime_now="$(_ac_file_mtime "$_AC_CONFIG_FILE")"
+        if (( ! _ac_cfg_loaded )) || [[ "$_ac_cfg_mtime_now" != "$_ac_cfg_mtime" ]]; then
+            _ac_load_config
+            _ac_cfg_mtime="$_ac_cfg_mtime_now"
+            _ac_cfg_loaded=1
+        fi
 
         if [[ ! -d "$_AC_PROJECTS_DIR" ]]; then
             echo "Error: Projects directory not found: $_AC_PROJECTS_DIR"
@@ -4151,7 +4205,7 @@ ac() {
         else
             local _f_lower="$(_ac_lower "$_ac_filter")" _f_dir _f_base _f_disp
             for _f_dir in "${all_dirs[@]+"${all_dirs[@]}"}"; do
-                _f_base="$(basename "$_f_dir")"
+                _f_base="${_f_dir##*/}"
                 _f_disp="$(_ac_project_label "$_f_dir")"
                 if [[ "$(_ac_lower "$_f_base")" == *"$_f_lower"* || "$(_ac_lower "$_f_disp")" == *"$_f_lower"* ]]; then
                     dirs+=("$_f_dir")
@@ -4229,7 +4283,8 @@ ac() {
         ((index++))
 
         # Entry 2: root (cd + kiro)
-        printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "$(basename "$_AC_PROJECTS_DIR")" "$reset"
+        local _root_base="${_AC_PROJECTS_DIR%/}"
+        printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "${_root_base##*/}" "$reset"
         ((index++))
 
         if [[ -n "$_ac_filter" ]]; then
@@ -4242,8 +4297,7 @@ ac() {
 
         # Entry 3+: projects
         for dir in "${dirs[@]+"${dirs[@]}"}"; do
-            local _dirname
-            _dirname="$(basename "$dir")"
+            local _dirname="${dir##*/}"
             local _safe_dirname
             _safe_dirname="$(_ac_safe_name "$_dirname")"
             local _display_name
@@ -4409,7 +4463,8 @@ ac() {
         elif ((key == 2 )); then
             cd "$_AC_PROJECTS_DIR" || return 1
             local flags
-            flags=$(_ac_get_flags "$(basename "$_AC_PROJECTS_DIR")")
+            local _root_base="${_AC_PROJECTS_DIR%/}"
+            flags=$(_ac_get_flags "${_root_base##*/}")
             _ac_run_cli "$flags"
             return
         else

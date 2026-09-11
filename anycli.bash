@@ -113,7 +113,19 @@ _ac_resolve_bin() {
 # Pure-alphanumeric names are returned unchanged, which keeps the common case
 # readable and preserves existing variable names.
 _ac_safe_name() {
-    local s="${1:-}" out="" i c
+    local s="${1:-}"
+    # Fast path: an all-alphanumeric name (the common case for project
+    # directory names) needs no escaping at all -- skip the char-by-char
+    # loop, and with it the per-non-alnum-byte `printf` subshell below,
+    # entirely. (A memoizing cache was considered too -- every call site
+    # invokes this via command substitution, `safe="$(_ac_safe_name ...)"`,
+    # so any cache this function itself populated would be written inside
+    # that subshell and discarded the instant the substitution completes,
+    # same trap _ac_find_python hit; making memoization work for real would
+    # mean changing the calling convention at every one of this function's
+    # ~15 call sites, not just here.)
+    [[ "$s" =~ ^[a-zA-Z0-9]*$ ]] && { printf '%s' "$s"; return; }
+    local out="" i c
     for (( i = 0; i < ${#s}; i++ )); do
         c="${s:$i:1}"
         case "$c" in
@@ -1386,7 +1398,17 @@ _ac_theme_field() {
 }
 
 _ac_find_python() {
-    # Find a working Python interpreter
+    # Find a working Python interpreter.
+    #
+    # Deliberately does NOT cache itself: every call site invokes this via
+    # command substitution (`python_bin=$(_ac_find_python)`), which forks a
+    # subshell -- any variable this function assigned would be set only in
+    # that subshell and vanish the instant the substitution completes,
+    # making an internal cache a no-op that looks like it works but never
+    # actually avoids re-detection. Callers that want caching (see the
+    # _AC_WT_BIN pattern in _ac_launch_project) must cache the *result* of
+    # the substitution themselves, in their own scope.
+    #
     # Must verify execution because Windows Store stubs pass 'command -v' but fail at runtime
     if command -v python3 &>/dev/null && python3 --version &>/dev/null; then
         echo "python3"
@@ -2729,7 +2751,7 @@ _ac_check_cli_update_via_index() {
     # Extract the first version from the index (latest release).
     # The JSON format is: "versions": [{"version": "X.Y.Z", ...}, ...]
     # Use portable grep (no -oP) for Windows Git Bash compatibility.
-    latest_ver=$(echo "$index_json" | grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
+    latest_ver=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' <<< "$index_json" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
     if [[ -z "$latest_ver" ]]; then
         return 1
     fi
@@ -2920,11 +2942,11 @@ _ac_show_cli_changelog() {
         if [[ $in_target -eq 1 && "$line" == *"\"type\""* ]]; then
             # Capture just the quoted value, so a line holding several keys
             # ("type": "added", "description": "...") still parses.
-            change_type=$(echo "$line" | sed -n 's/.*"type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            change_type=$(sed -n 's/.*"type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$line")
         fi
         # Parse changes within target block
         if [[ $in_target -eq 1 && "$line" == *"\"description\""* ]]; then
-            change_desc=$(echo "$line" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            change_desc=$(sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$line")
             found_changes=1
             local label_color="$c_dim" label=""
             case "$change_type" in
@@ -4341,7 +4363,7 @@ ac() {
             fi
             if [[ "${_AC_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]; then
                 local _app_count
-                _app_count=$(echo "$_AC_APPS_UPDATE_LIST" | wc -w)
+                _app_count=$(wc -w <<< "$_AC_APPS_UPDATE_LIST")
                 if [[ -n "$_ac_update_msg" ]]; then
                     _ac_update_msg="${_ac_update_msg} + ${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
                 else

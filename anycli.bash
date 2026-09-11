@@ -156,6 +156,13 @@ _ac_safe_name() {
     printf '%s' "$out"
 }
 
+# Variable-name prefixes for the five per-project properties. Shared by
+# _ac_load_config (clearing them before a reparse), _ac_write_config
+# (collecting which projects have any config to emit), and _ac_config_menu
+# (counting configured entries for the summary lines) -- previously each of
+# those repeated the same five-prefix list as five near-identical blocks.
+_AC_PROJ_PROP_PREFIXES=(_AC_CLI_FLAGS_ _AC_PROJECT_COLOR_ _AC_PROJECT_TITLE_ _AC_PROJECT_PROMPT_ _AC_PROJECT_ALIAS_)
+
 # Registry mapping a safe suffix back to the project name as the user wrote it.
 # Without this, _ac_write_config rewrote every project key in its sanitized
 # form, corrupting names that contained hyphens or dots.
@@ -486,22 +493,12 @@ _ac_load_config() {
     _AC_SHOW_GIT_STATUS="false"
     _AC_SHOW_SESSIONS="false"
     _AC_EXTRA_DIRS=()
-    # Clear per-project flags/color/title
-    local varname
-    for varname in $(_ac_vars_with_prefix _AC_CLI_FLAGS_); do
-        unset "$varname"
-    done
-    for varname in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_); do
-        unset "$varname"
-    done
-    for varname in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_); do
-        unset "$varname"
-    done
-    for varname in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do
-        unset "$varname"
-    done
-    for varname in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do
-        unset "$varname"
+    # Clear per-project flags/color/title/prompt/alias
+    local varname prefix
+    for prefix in "${_AC_PROJ_PROP_PREFIXES[@]}"; do
+        for varname in $(_ac_vars_with_prefix "$prefix"); do
+            unset "$varname"
+        done
     done
     _AC_PROJ_NAME=()
     for varname in $(_ac_vars_with_prefix _AC_APP_); do
@@ -993,31 +990,13 @@ _ac_write_config() {
         # Collect all projects that have any config (using assoc array as set)
         local -A _ac_seen=()
         local -a _ac_all_projects=()
-        local varname p
-        for varname in $(_ac_vars_with_prefix _AC_CLI_FLAGS_); do
-            p="${varname#_AC_CLI_FLAGS_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
-        done
-        for varname in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_); do
-            p="${varname#_AC_PROJECT_COLOR_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
-        done
-        for varname in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_); do
-            p="${varname#_AC_PROJECT_TITLE_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
-        done
-        for varname in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do
-            p="${varname#_AC_PROJECT_PROMPT_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
-        done
-        for varname in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do
-            p="${varname#_AC_PROJECT_ALIAS_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
+        local varname p prefix
+        for prefix in "${_AC_PROJ_PROP_PREFIXES[@]}"; do
+            for varname in $(_ac_vars_with_prefix "$prefix"); do
+                p="${varname#"$prefix"}"
+                [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
+                _ac_seen[$p]=1
+            done
         done
         for proj in "${_ac_all_projects[@]:-}"; do
             [[ -z "$proj" ]] && continue

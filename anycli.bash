@@ -680,6 +680,126 @@ _ac_get_flags() {
     fi
 }
 
+# Emit the tab-launch script to stdout: a self-deleting bash script that sets
+# the tab title, cd's into the project, drains stray terminal-handshake bytes,
+# and execs the CLI. Pure (writes nothing to disk itself) so its content can
+# be tested by capturing stdout, rather than writing a real temp file and
+# reading it back through a mocked wt.exe.
+#
+# Args: <script_file> <title> <dir> <launch_argv...>
+#   script_file  the path this script will be written to by the caller --
+#                used only for its own self-delete line
+#   title        tab title (emitted as an OSC 0 escape), or empty for none
+#   dir          project directory to cd into
+#   launch_argv  the fully-resolved argv to exec (CLI binary path, launch
+#                subcommand, resume/picker flag, split flags, prompt)
+_ac_emit_tab_script() {
+    local script_file="$1" title="$2" dir="$3"
+    shift 3
+    local -a launch_argv=("$@")
+
+    # Every interpolated value is shell-quoted with printf %q so that directory
+    # names, titles, and prompts containing quotes or shell metacharacters are
+    # passed as literal data and cannot inject commands.
+    #
+    # The script removes itself as its first action rather than its last: the
+    # final command runs via exec, so anything after it would never run.
+    printf '#!/usr/bin/env bash\n'
+    printf 'rm -f -- %q\n' "$script_file"
+    printf 'export _AC_SPAWNED_TAB=1\n'
+    if [[ -n "$title" ]]; then
+        printf 'printf %q\n' "$(printf '\e]0;%s\a' "$title")"
+    fi
+    printf 'cd %q || exit 1\n' "$dir"
+    # Drain any pending terminal-reply bytes (device-attribute / cursor-position
+    # / OSC color-query responses from the wt.exe tab handshake) so they don't
+    # leak into the CLI's prompt buffer as stray input (e.g. "2c/3434") on
+    # launch.
+    #
+    # A single fixed-timeout read is not enough: the handshake replies arrive
+    # asynchronously and can land *after* one read window closes. Instead we
+    # put the TTY into raw, no-echo mode and drain in a loop, giving the
+    # terminal an initial settle window and continuing until an iteration
+    # reads zero bytes. The TTY state is always restored before exec so the
+    # CLI inherits a clean terminal.
+    # The single quotes below are intentional: these printf calls emit
+    # literal shell code into the generated tab script. Variables like
+    # $_saved and $_junk must NOT expand at generation time — they belong
+    # to the spawned script's runtime. (SC2016 suppressed in .shellcheckrc.)
+    printf '%s\n' '_ac_drain_tty() {'
+    printf '%s\n' '    [[ -t 0 ]] || return 0'
+    printf '%s\n' '    local _saved'
+    printf '%s\n' '    _saved="$(stty -g 2>/dev/null)" || return 0'
+    printf '%s\n' '    trap '\''stty "$_saved" 2>/dev/null'\'' INT TERM'
+    printf '%s\n' '    stty raw -echo min 0 time 0 2>/dev/null'
+    printf '%s\n' '    # Let the wt.exe tab handshake replies arrive.'
+    printf '%s\n' '    sleep 0.15'
+    printf '%s\n' '    local _junk _i'
+    printf '%s\n' '    for ((_i=0; _i<50; _i++)); do'
+    printf '%s\n' '        _junk=""'
+    printf '%s\n' '        IFS= read -r -t 0.05 -n 4096 _junk 2>/dev/null'
+    printf '%s\n' '        [[ -z "$_junk" ]] && break'
+    printf '%s\n' '    done'
+    printf '%s\n' '    trap - INT TERM'
+    printf '%s\n' '    stty "$_saved" 2>/dev/null'
+    printf '%s\n' '}'
+    printf '%s\n' '_ac_drain_tty'
+    printf 'exec'
+    printf ' %q' "${launch_argv[@]}"
+    printf '\n'
+}
+
+# Build the wt.exe invocation for opening a new tab, into the global array
+# _AC_WT_ARGS. A pure function of its arguments plus _ac_platform() (no
+# filesystem or process side effects), so each platform's exact argv can be
+# asserted directly instead of mocking wt.exe and grepping a captured log.
+#
+# Args: <dir> <script_file> <title> <color>
+# Reads: $WT_PROFILE_ID, $WSL_DISTRO_NAME (both optional, same as before this
+# was extracted) and the platform from _ac_platform().
+_ac_build_wt_invocation() {
+    local dir="$1" script_file="$2" title="$3" color="$4"
+    _AC_WT_ARGS=("-w" "0" "new-tab")
+    [[ -n "${WT_PROFILE_ID:-}" ]] && _AC_WT_ARGS+=("--profile" "$WT_PROFILE_ID")
+    [[ -n "$title" ]] && _AC_WT_ARGS+=("--title" "$title")
+    [[ -n "$color" ]] && _AC_WT_ARGS+=("--tabColor" "$color")
+
+    # Platform-specific wt.exe invocation. See _ac_platform for the single
+    # detection seam every platform-specific branch in the file shares.
+    case "$(_ac_platform)" in
+        wsl)
+            local distro="${WSL_DISTRO_NAME:-Ubuntu}"
+            # Do NOT pin wt.exe's --startingDirectory to a \\wsl.localhost\...
+            # UNC path: WSL cannot set its working directory to a UNC path, so
+            # wsl.exe fails with "Wsl/ERROR_PATH_NOT_FOUND" before the tab
+            # script runs. Instead pass the Linux path to `wsl.exe --cd`,
+            # which is the supported way to set a WSL invocation's working
+            # directory. The generated script also `cd`s to the project as a
+            # belt-and-braces fallback.
+            _AC_WT_ARGS+=("wsl.exe" "-d" "$distro" "--cd" "$dir" "--" "bash" "-l" "$script_file")
+            ;;
+        gitbash)
+            # Git Bash on native Windows — convert paths for wt.exe (Windows process)
+            # Use env to set _AC_SPAWNED_TAB BEFORE bash sources .bashrc
+            # Use -- to separate wt.exe options from the command
+            local win_script win_bash win_env win_dir
+            win_script="$(cygpath -w "$script_file" 2>/dev/null || echo "$script_file")"
+            win_bash="$(cygpath -w "$(command -v bash)" 2>/dev/null || echo "bash")"
+            win_env="$(cygpath -w "$(command -v env)" 2>/dev/null || echo "env")"
+            # Pin the starting directory to the project (Windows path) so a stale
+            # Windows Terminal default-profile startingDirectory cannot break the
+            # launch with "Could not access starting directory" (error 0x8007010b).
+            win_dir="$(cygpath -w "$dir" 2>/dev/null || true)"
+            [[ -n "$win_dir" ]] && _AC_WT_ARGS+=("--startingDirectory" "$win_dir")
+            _AC_WT_ARGS+=("--" "$win_env" "_AC_SPAWNED_TAB=1" "$win_bash" "-l" "$win_script")
+            ;;
+        *)
+            _AC_WT_ARGS+=("bash" "-l" "$script_file")
+            ;;
+    esac
+    return 0
+}
+
 _ac_launch_project() {
     local dir="$1"
     local resume="${2:-}"
@@ -742,12 +862,6 @@ _ac_launch_project() {
     script_file="$(mktemp "${TMPDIR:-/tmp}/ac-tab-XXXXXXXX.sh" 2>/dev/null)" || return 1
     chmod 700 "$script_file" 2>/dev/null
 
-    # Every interpolated value is shell-quoted with printf %q so that directory
-    # names, titles, and prompts containing quotes or shell metacharacters are
-    # passed as literal data and cannot inject commands.
-    #
-    # The script removes itself as its first action rather than its last: the
-    # final command runs via exec, so anything after it would never run.
     # argv[0] is the resolved executable path from `type -P`. The spawned tab
     # runs a NON-interactive `bash -l`, and .bashrc's standard interactive guard
     # (`case $- in *) return;;`) returns before user aliases are defined — so the
@@ -773,97 +887,15 @@ _ac_launch_project() {
         fi
     fi
     _ac_split_flags "$flags"
-    launch_argv+=("${_AC_FLAG_ARGV[@]}")
+    launch_argv+=("${_AC_FLAG_ARGV[@]+"${_AC_FLAG_ARGV[@]}"}")
     [[ -n "$prompt" ]] && launch_argv+=("$prompt")
 
-    {
-        printf '#!/usr/bin/env bash\n'
-        printf 'rm -f -- %q\n' "$script_file"
-        printf 'export _AC_SPAWNED_TAB=1\n'
-        if [[ -n "$title" ]]; then
-            printf 'printf %q\n' "$(printf '\e]0;%s\a' "$title")"
-        fi
-        printf 'cd %q || exit 1\n' "$dir"
-        # Drain any pending terminal-reply bytes (device-attribute / cursor-position
-        # / OSC color-query responses from the wt.exe tab handshake) so they don't
-        # leak into the CLI's prompt buffer as stray input (e.g. "2c/3434") on
-        # launch.
-        #
-        # A single fixed-timeout read is not enough: the handshake replies arrive
-        # asynchronously and can land *after* one read window closes. Instead we
-        # put the TTY into raw, no-echo mode and drain in a loop, giving the
-        # terminal an initial settle window and continuing until an iteration
-        # reads zero bytes. The TTY state is always restored before exec so the
-        # CLI inherits a clean terminal.
-        # The single quotes below are intentional: these printf calls emit
-        # literal shell code into the generated tab script. Variables like
-        # $_saved and $_junk must NOT expand at generation time — they belong
-        # to the spawned script's runtime. (SC2016 suppressed in .shellcheckrc.)
-        printf '%s\n' '_ac_drain_tty() {'
-        printf '%s\n' '    [[ -t 0 ]] || return 0'
-        printf '%s\n' '    local _saved'
-        printf '%s\n' '    _saved="$(stty -g 2>/dev/null)" || return 0'
-        printf '%s\n' '    trap '\''stty "$_saved" 2>/dev/null'\'' INT TERM'
-        printf '%s\n' '    stty raw -echo min 0 time 0 2>/dev/null'
-        printf '%s\n' '    # Let the wt.exe tab handshake replies arrive.'
-        printf '%s\n' '    sleep 0.15'
-        printf '%s\n' '    local _junk _i'
-        printf '%s\n' '    for ((_i=0; _i<50; _i++)); do'
-        printf '%s\n' '        _junk=""'
-        printf '%s\n' '        IFS= read -r -t 0.05 -n 4096 _junk 2>/dev/null'
-        printf '%s\n' '        [[ -z "$_junk" ]] && break'
-        printf '%s\n' '    done'
-        printf '%s\n' '    trap - INT TERM'
-        printf '%s\n' '    stty "$_saved" 2>/dev/null'
-        printf '%s\n' '}'
-        printf '%s\n' '_ac_drain_tty'
-        printf 'exec'
-        printf ' %q' "${launch_argv[@]}"
-        printf '\n'
-    } > "$script_file"
+    _ac_emit_tab_script "$script_file" "$title" "$dir" "${launch_argv[@]}" > "$script_file"
     chmod +x "$script_file"
 
-    # Build wt.exe args
-    local -a wt_args=("-w" "0" "new-tab")
-    [[ -n "${WT_PROFILE_ID:-}" ]] && wt_args+=("--profile" "$WT_PROFILE_ID")
-    [[ -n "$title" ]] && wt_args+=("--title" "$title")
-    [[ -n "$color" ]] && wt_args+=("--tabColor" "$color")
+    _ac_build_wt_invocation "$dir" "$script_file" "$title" "$color"
 
-    # Platform-specific wt.exe invocation. See _ac_platform for the single
-    # detection seam every platform-specific branch in the file shares.
-    case "$(_ac_platform)" in
-        wsl)
-            local distro="${WSL_DISTRO_NAME:-Ubuntu}"
-            # Do NOT pin wt.exe's --startingDirectory to a \\wsl.localhost\...
-            # UNC path: WSL cannot set its working directory to a UNC path, so
-            # wsl.exe fails with "Wsl/ERROR_PATH_NOT_FOUND" before the tab
-            # script runs. Instead pass the Linux path to `wsl.exe --cd`,
-            # which is the supported way to set a WSL invocation's working
-            # directory. The generated script also `cd`s to the project as a
-            # belt-and-braces fallback.
-            wt_args+=("wsl.exe" "-d" "$distro" "--cd" "$dir" "--" "bash" "-l" "$script_file")
-            ;;
-        gitbash)
-            # Git Bash on native Windows — convert paths for wt.exe (Windows process)
-            # Use env to set _AC_SPAWNED_TAB BEFORE bash sources .bashrc
-            # Use -- to separate wt.exe options from the command
-            local win_script win_bash win_env win_dir
-            win_script="$(cygpath -w "$script_file" 2>/dev/null || echo "$script_file")"
-            win_bash="$(cygpath -w "$(command -v bash)" 2>/dev/null || echo "bash")"
-            win_env="$(cygpath -w "$(command -v env)" 2>/dev/null || echo "env")"
-            # Pin the starting directory to the project (Windows path) so a stale
-            # Windows Terminal default-profile startingDirectory cannot break the
-            # launch with "Could not access starting directory" (error 0x8007010b).
-            win_dir="$(cygpath -w "$dir" 2>/dev/null || true)"
-            [[ -n "$win_dir" ]] && wt_args+=("--startingDirectory" "$win_dir")
-            wt_args+=("--" "$win_env" "_AC_SPAWNED_TAB=1" "$win_bash" "-l" "$win_script")
-            ;;
-        *)
-            wt_args+=("bash" "-l" "$script_file")
-            ;;
-    esac
-
-    "$_AC_WT_BIN" "${wt_args[@]}" 2>/dev/null &
+    "$_AC_WT_BIN" "${_AC_WT_ARGS[@]}" 2>/dev/null &
     disown
     _AC_LAUNCHED_NEW_TAB=1
 }

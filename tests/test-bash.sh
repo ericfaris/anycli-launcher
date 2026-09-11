@@ -1791,6 +1791,109 @@ if ! { [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; }
 fi
 
 # ═══════════════════════════════════════
+echo "── _ac_build_wt_invocation: pure per-platform argv (no wt.exe mock needed) ──"
+
+# wsl: must invoke wsl.exe --cd with the Linux path -- and must NOT pass a UNC
+# --startingDirectory (regression: WSL cannot set its working directory to a
+# \\wsl.localhost\... path, so wsl.exe used to fail with ERROR_PATH_NOT_FOUND).
+_AC_PLATFORM_OVERRIDE="wsl"
+WSL_DISTRO_NAME="Ubuntu-Test"
+_ac_build_wt_invocation "/home/me/proj" "/tmp/ac-tab-x.sh" "My Title" "#112233"
+wt_argv="${_AC_WT_ARGS[*]}"
+assert_contains "wt-invocation(wsl): title" "--title My Title" "$wt_argv"
+assert_contains "wt-invocation(wsl): color" "--tabColor #112233" "$wt_argv"
+assert_contains "wt-invocation(wsl): wsl.exe with distro" "wsl.exe -d Ubuntu-Test" "$wt_argv"
+assert_contains "wt-invocation(wsl): --cd with linux path" "--cd /home/me/proj" "$wt_argv"
+if [[ "$wt_argv" != *'--startingDirectory'* && "$wt_argv" != *'\\wsl'* ]]; then
+    printf '  \e[32m✓\e[0m wt-invocation(wsl): no UNC --startingDirectory\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-invocation(wsl): must not pass a UNC --startingDirectory\n    actual: %s\n' "$wt_argv"; ((FAIL++))
+fi
+unset _AC_PLATFORM_OVERRIDE WSL_DISTRO_NAME _AC_WT_ARGS
+
+# gitbash: must convert paths via cygpath and pin --startingDirectory.
+cat > "$MOCK_BIN/cygpath" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "$1" == "-w" ]]; then
+    echo "C:\\win\\${2##*/}"
+else
+    echo "$1"
+fi
+MOCK
+chmod +x "$MOCK_BIN/cygpath"
+_AC_PLATFORM_OVERRIDE="gitbash"
+_ac_build_wt_invocation "/home/me/proj" "/tmp/ac-tab-x.sh" "GB Title" "#aabbcc"
+wt_argv="${_AC_WT_ARGS[*]}"
+assert_contains "wt-invocation(gitbash): title" "--title GB Title" "$wt_argv"
+assert_contains "wt-invocation(gitbash): startingDirectory converted" "--startingDirectory C:\\win\\proj" "$wt_argv"
+assert_contains "wt-invocation(gitbash): sets _AC_SPAWNED_TAB via env" "_AC_SPAWNED_TAB=1" "$wt_argv"
+if [[ "$wt_argv" != *'wsl.exe'* ]]; then
+    printf '  \e[32m✓\e[0m wt-invocation(gitbash): does not invoke wsl.exe\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-invocation(gitbash): must not invoke wsl.exe\n'; ((FAIL++))
+fi
+rm -f "$MOCK_BIN/cygpath"
+unset _AC_PLATFORM_OVERRIDE _AC_WT_ARGS
+
+# linux/macos (the default case): plain bash -l <script>, no Windows-specific args.
+_AC_PLATFORM_OVERRIDE="linux"
+_ac_build_wt_invocation "/home/me/proj" "/tmp/ac-tab-x.sh" "" ""
+wt_argv="${_AC_WT_ARGS[*]}"
+assert_contains "wt-invocation(linux): bash -l with script" "bash -l /tmp/ac-tab-x.sh" "$wt_argv"
+if [[ "$wt_argv" != *'C:\'* && "$wt_argv" != *'wsl.exe'* && "$wt_argv" != *'--startingDirectory'* ]]; then
+    printf '  \e[32m✓\e[0m wt-invocation(linux): no Windows-specific args\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-invocation(linux): should have no Windows-specific args\n    actual: %s\n' "$wt_argv"; ((FAIL++))
+fi
+unset _AC_PLATFORM_OVERRIDE _AC_WT_ARGS
+
+# WT_PROFILE_ID, when set, is passed through regardless of platform.
+_AC_PLATFORM_OVERRIDE="linux"
+WT_PROFILE_ID="{guid-here}"
+_ac_build_wt_invocation "/home/me/proj" "/tmp/ac-tab-x.sh" "" ""
+assert_contains "wt-invocation: profile id passed through" "--profile {guid-here}" "${_AC_WT_ARGS[*]}"
+unset _AC_PLATFORM_OVERRIDE WT_PROFILE_ID _AC_WT_ARGS
+
+# ═══════════════════════════════════════
+echo "── _ac_emit_tab_script: pure script content (no temp file needed) ──"
+
+script_out="$(_ac_emit_tab_script "/tmp/ac-tab-abc123.sh" "" "/home/me/proj" /usr/bin/claude --resume)"
+assert_contains "emit-script: shebang" "#!/usr/bin/env bash" "$script_out"
+first_line="$(printf '%s\n' "$script_out" | sed -n '2p')"
+assert_eq "emit-script: self-delete is the FIRST real line (before any exec)" "rm -f -- /tmp/ac-tab-abc123.sh" "$first_line"
+assert_contains "emit-script: cd's into the project (quoted)" "cd /home/me/proj || exit 1" "$script_out"
+assert_contains "emit-script: sets _AC_SPAWNED_TAB" "export _AC_SPAWNED_TAB=1" "$script_out"
+assert_contains "emit-script: execs the resolved argv" "exec /usr/bin/claude --resume" "$script_out"
+if [[ "$script_out" != *']0;'* ]]; then
+    printf '  \e[32m✓\e[0m emit-script: no title (OSC 0) line when title is empty\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m emit-script: should have no title line when title is empty\n    actual: %s\n' "$script_out"; ((FAIL++))
+fi
+
+# With a title: an OSC 0 title-setting line must be present and name the title.
+script_out2="$(_ac_emit_tab_script "/tmp/ac-tab-abc123.sh" "My Project" "/home/me/proj" /usr/bin/claude)"
+assert_contains "emit-script: title line present when title is set" ']0;My Project' "$script_out2"
+
+# Quoting: a directory containing shell metacharacters ($(), spaces) must
+# survive as literal data when the generated script actually runs, not be
+# interpreted as shell syntax.
+EVIL_PROJ_PARENT="$(mktemp -d)"
+EVIL_PROJ_DIR="$EVIL_PROJ_PARENT/weird \$(touch /tmp/ac-emit-pwned) dir"
+mkdir -p "$EVIL_PROJ_DIR"
+QUOTE_SCRIPT="$(mktemp -u "${TMPDIR:-/tmp}/ac-tab-quoteXXXXXX.sh")"
+_ac_emit_tab_script "$QUOTE_SCRIPT" "" "$EVIL_PROJ_DIR" /bin/true > "$QUOTE_SCRIPT"
+chmod +x "$QUOTE_SCRIPT"
+rm -f /tmp/ac-emit-pwned
+bash "$QUOTE_SCRIPT" >/dev/null 2>&1 || true
+if [[ -f /tmp/ac-emit-pwned ]]; then
+    printf '  \e[31m✗\e[0m emit-script: directory with $() must not execute as code\n'; ((FAIL++))
+    rm -f /tmp/ac-emit-pwned
+else
+    printf '  \e[32m✓\e[0m emit-script: directory with $() must not execute as code\n'; ((PASS++))
+fi
+rm -rf "$EVIL_PROJ_PARENT" "$QUOTE_SCRIPT" 2>/dev/null
+
+# ═══════════════════════════════════════
 echo "── Cross-Platform: Git Bash Detection ──"
 
 # Test: MSYSTEM=MINGW64 triggers Git Bash code path

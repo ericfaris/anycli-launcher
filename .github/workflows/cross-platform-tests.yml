@@ -20,6 +20,75 @@ jobs:
       - name: Run test suite under bash
         shell: bash
         run: bash tests/run-tests.sh
+      - name: Platform check (informational)
+        # Not a gate: this reports on the runner's real environment (which
+        # optional tools are present, whether ISO8601->epoch date conversion
+        # works, etc.) so a gap shows up in the log on every OS in the
+        # matrix, but a runner lacking an optional tool shouldn't fail CI.
+        shell: bash
+        if: always()
+        run: bash tests/check-platform.sh || true
+
+  # Exercises the real Git Bash shipped with Git for Windows on a
+  # windows-latest runner -- native platform detection (no _AC_PLATFORM_OVERRIDE,
+  # no mocked cygpath/wt.exe), so a regression in that detection or in the
+  # genuine MSYS environment (real `uname -s`, real `cygpath`) would surface
+  # here even though it can't (a GUI-less runner can't actually spawn a
+  # Windows Terminal tab) exercise the full new-tab launch end to end.
+  gitbash-native-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm this really is Git Bash, not WSL or a mock
+        shell: bash
+        run: |
+          echo "uname -s: $(uname -s)"
+          echo "MSYSTEM: ${MSYSTEM:-<unset>}"
+          echo "cygpath: $(command -v cygpath || echo 'not found')"
+      - name: _ac_platform reports gitbash without any override
+        shell: bash
+        run: |
+          source ./anycli.bash
+          detected="$(_ac_platform)"
+          echo "detected: $detected"
+          [[ "$detected" == "gitbash" ]] || { echo "FAIL: expected gitbash, got $detected"; exit 1; }
+      - name: check-platform.sh reports Git Bash (Windows) natively
+        shell: bash
+        run: |
+          out="$(bash tests/check-platform.sh)"
+          echo "$out"
+          echo "$out" | grep -q 'Platform: Git Bash (Windows)' || { echo "FAIL: platform line missing/wrong"; exit 1; }
+      - name: Basic ac functionality under real Git Bash
+        shell: bash
+        run: |
+          MOCK_BIN=$(mktemp -d)
+          cat > "$MOCK_BIN/claude" << 'EOF'
+          #!/usr/bin/env bash
+          echo "CLAUDE_CALLED: $*"
+          EOF
+          chmod +x "$MOCK_BIN/claude"
+          export PATH="$MOCK_BIN:$PATH"
+          source ./anycli.bash
+          export _AC_CONFIG_FILE="$(mktemp)"
+          cat > "$_AC_CONFIG_FILE" << 'CFG'
+          cli_tool: "claude"
+          cli_launch: ""
+          CFG
+          mkdir -p /tmp/ac-gitbash-projects/demo-project
+          export AC_PROJECTS_DIR=/tmp/ac-gitbash-projects
+
+          menu_output=$(echo "q" | ac 2>&1)
+          echo "$menu_output"
+          case "$menu_output" in
+            *"demo-project"*) echo "OK: menu renders under real Git Bash" ;;
+            *) echo "FAIL: menu missing project"; exit 1 ;;
+          esac
+
+          launch_out=$(echo "3" | ac 2>&1)
+          case "$launch_out" in
+            *"CLAUDE_CALLED:"*) echo "OK: launch works under real Git Bash" ;;
+            *) echo "FAIL: launch broken"; exit 1 ;;
+          esac
 
   zsh-source-check:
     strategy:
@@ -111,6 +180,42 @@ jobs:
           case "$written" in
             *'projects_dir: "~/projects"'*) echo "OK: config write produces ~/projects under zsh" ;;
             *) echo "FAIL: config write corrupted projects_dir under zsh:"; echo "$written"; exit 1 ;;
+          esac
+
+          # Regression: zsh's `read -n 1` (the "press any key to continue"
+          # idiom used throughout the changelog/help/theme screens) hangs
+          # under zsh instead of returning on one keystroke -- confirmed via
+          # a pty harness, not reproducible through a plain pipe alone, which
+          # is exactly why this went undetected here for a while. _ac_pause
+          # (read -k 1 on a real tty, a plain line read otherwise) replaced
+          # it. Drive the changelog and key-help screens, both of which pause
+          # on _ac_pause, entirely through piped input as CI must -- this
+          # would have hung this whole job (eventually killed by the runner's
+          # job timeout) before that fix, and would abort outright under
+          # `zsh -e` if _ac_pause's non-tty fallback ever regressed (read -k
+          # unconditionally errors "not interactive and can't open terminal"
+          # over a plain pipe).
+          export AC_PROJECTS_DIR=/tmp/ac-ci-projects
+          pause_out=$(printf 'v\nZ\n?\nZ\nq\n' | ac 2>&1)
+          echo "$pause_out"
+          case "$pause_out" in
+            *"Changelog"*) echo "OK: changelog screen rendered (_ac_pause did not hang)" ;;
+            *) echo "FAIL: changelog screen missing"; exit 1 ;;
+          esac
+          case "$pause_out" in
+            *"Menu keys"*) echo "OK: key-help screen rendered (_ac_pause did not hang)" ;;
+            *) echo "FAIL: key-help screen missing"; exit 1 ;;
+          esac
+
+          # Regression: the config menu's array-based prompts (`read -a` in
+          # bash, `read -rA` in zsh -- e.g. the CLI-tool picker's list of
+          # detected tools) need the zsh-specific branch every such call site
+          # in this file carries. Drive into the CLI-tool submenu and back out.
+          config_out=$(printf 'c\n4\nb\nb\nq\n' | ac 2>&1)
+          echo "$config_out"
+          case "$config_out" in
+            *"Available AI CLI tools"*) echo "OK: config menu's CLI-tool submenu rendered under zsh" ;;
+            *) echo "FAIL: CLI-tool submenu missing"; exit 1 ;;
           esac
 
           echo "zsh checks passed"

@@ -30,14 +30,28 @@ _ac_vars_with_prefix() {
 # Read the value of the variable named "$1" — a portable stand-in for bash's
 # ${!1} indirect expansion, which zsh's parser rejects outright (no amount of
 # `emulate -L bash` teaches it that syntax; eval is the only common ground).
+#
+# This is the hottest primitive in the file (every flag/color/title/prompt/
+# alias/app-field read goes through it, several times per project per menu
+# render), so the bash branch uses bash's own ${!1} indirect expansion
+# directly rather than eval — no subshell, no string-parsing a second script.
+# zsh still needs eval; it has no equivalent syntax at all.
 _ac_indirect() {
-    local _ac_ind_val
-    eval "_ac_ind_val=\"\${$1:-}\""
-    printf '%s' "$_ac_ind_val"
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        local _ac_ind_val
+        eval "_ac_ind_val=\"\${$1:-}\""
+        printf '%s' "$_ac_ind_val"
+    else
+        printf '%s' "${!1:-}"
+    fi
 }
 
 _ac_indirect_set() {
-    eval "[[ -n \"\${$1+set}\" ]]"
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        eval "[[ -n \"\${$1+set}\" ]]"
+    else
+        [[ -n "${!1+set}" ]]
+    fi
 }
 
 # Print the keys of the associative array named "$1", one per line — a
@@ -63,9 +77,61 @@ _ac_lower() {
     fi
 }
 
+# "Press any key to continue" — read exactly one raw keypress with no
+# newline required. Under bash, `read -n 1` does this directly. Under zsh,
+# `read -n 1` is NOT the raw-keypress equivalent -- it silently hangs waiting
+# for a newline that never comes (confirmed interactively: the keystroke
+# echoes but read never returns). zsh's actual single-raw-character read is
+# `read -k 1`, but `-k` needs a real terminal device: over a plain pipe (no
+# tty at all -- piped/scripted invocations, tests, CI) it fails outright
+# with "not interactive and can't open terminal" instead of reading
+# anything, confirmed both interactively via a pty and over a plain pipe.
+# So `-k` is used only when stdin is actually a terminal; otherwise this
+# falls back to a plain line read, which works the same as bash's `-n 1`
+# does over a non-tty pipe (reads to the next newline or EOF, whichever
+# comes first -- there is no raw single-keypress option for non-tty input in
+# either shell).
+_ac_pause() {
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        if [[ -t 0 ]]; then
+            read -k 1 -r _ac_pause_key 2>/dev/null
+        else
+            read -r _ac_pause_key 2>/dev/null
+        fi
+    else
+        read -r -n 1 _ac_pause_key 2>/dev/null
+    fi
+}
+
 _ac_assign() {
-    # Safely assign a value to a dynamically-named variable
-    eval "$1=\"\$2\""
+    # Safely assign a value to a dynamically-named variable. Under bash,
+    # printf -v does this without eval (no subshell, no re-parsing a second
+    # script); zsh's printf lacks -v, so it keeps the eval form.
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        eval "$1=\"\$2\""
+    else
+        printf -v "$1" '%s' "$2"
+    fi
+}
+
+# Resolve "$1" to a real executable path, ignoring shell aliases and
+# functions — a portable stand-in for bash's `type -P`. When a tool name is
+# shadowed by a shell alias or function (e.g. a security wrapper aliasing
+# `kiro-cli` to `kiro-guard`), `command -v` prints the alias/function
+# definition text instead of a path, and exec-ing that literal fails with
+# "exec: alias ...: not found". `type -P` (bash) / `whence -p` (zsh) only
+# ever yield an executable path or nothing.
+#
+# zsh's `type` builtin has no -P flag at all ("bad option: -P" — it isn't a
+# semantics difference, the flag flat out doesn't exist there), so this
+# can't be a `type -P` call guarded by `emulate -L bash` the way other
+# bash/zsh differences in this file are; `whence -p` is zsh's equivalent.
+_ac_resolve_bin() {
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        whence -p "$1" 2>/dev/null
+    else
+        type -P "$1" 2>/dev/null
+    fi
 }
 
 # Map a project name to a variable-name suffix.
@@ -79,7 +145,19 @@ _ac_assign() {
 # Pure-alphanumeric names are returned unchanged, which keeps the common case
 # readable and preserves existing variable names.
 _ac_safe_name() {
-    local s="${1:-}" out="" i c
+    local s="${1:-}"
+    # Fast path: an all-alphanumeric name (the common case for project
+    # directory names) needs no escaping at all -- skip the char-by-char
+    # loop, and with it the per-non-alnum-byte `printf` subshell below,
+    # entirely. (A memoizing cache was considered too -- every call site
+    # invokes this via command substitution, `safe="$(_ac_safe_name ...)"`,
+    # so any cache this function itself populated would be written inside
+    # that subshell and discarded the instant the substitution completes,
+    # same trap _ac_find_python hit; making memoization work for real would
+    # mean changing the calling convention at every one of this function's
+    # ~15 call sites, not just here.)
+    [[ "$s" =~ ^[a-zA-Z0-9]*$ ]] && { printf '%s' "$s"; return; }
+    local out="" i c
     for (( i = 0; i < ${#s}; i++ )); do
         c="${s:$i:1}"
         case "$c" in
@@ -89,6 +167,13 @@ _ac_safe_name() {
     done
     printf '%s' "$out"
 }
+
+# Variable-name prefixes for the five per-project properties. Shared by
+# _ac_load_config (clearing them before a reparse), _ac_write_config
+# (collecting which projects have any config to emit), and _ac_config_menu
+# (counting configured entries for the summary lines) -- previously each of
+# those repeated the same five-prefix list as five near-identical blocks.
+_AC_PROJ_PROP_PREFIXES=(_AC_CLI_FLAGS_ _AC_PROJECT_COLOR_ _AC_PROJECT_TITLE_ _AC_PROJECT_PROMPT_ _AC_PROJECT_ALIAS_)
 
 # Registry mapping a safe suffix back to the project name as the user wrote it.
 # Without this, _ac_write_config rewrote every project key in its sanitized
@@ -279,56 +364,25 @@ _ac_sweep_stale_tab_scripts() {
 # Run a command with a spinner indicator.
 # Usage: _ac_spin "message" command [args...]
 # Output from the command is suppressed; on failure the exit code is returned.
-_ac_spin() {
-    local msg="$1"; shift
+# Shared implementation for _ac_spin and _ac_spin_verbose (they differed only
+# in whether captured output is shown on failure).
+# Usage: _ac_spin_run <verbose:0|1> "message" command [args...]
+_ac_spin_run() {
+    local verbose="$1" msg="$2"; shift 2
     local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
     local c_dim=$'\e[2m'
     local c_cyan=$'\e[1;36m'
     local c_green=$'\e[1;32m'
     local reset=$'\e[0m'
     local i=0 pid
-
-    # Run command in background
-    "$@" >/dev/null 2>&1 &
-    pid=$!
-
-    # Animate spinner while command runs
-    printf "  %s%s%s %s" "$c_cyan" "${frames[0]}" "$reset" "$msg"
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r  %s%s%s %s" "$c_cyan" "${frames[i % ${#frames[@]}]}" "$reset" "$msg"
-        ((i++))
-        sleep 0.08
-    done
-
-    # Get exit status
-    wait "$pid"
-    local rc=$?
-
-    # Clear spinner line and show result
-    printf "\r"
-    if [[ $rc -eq 0 ]]; then
-        printf "  %s✓%s %s\n" "$c_green" "$reset" "$msg"
-    else
-        printf "  %s✗%s %s %s(failed)%s\n" $'\e[1;31m' "$reset" "$msg" "$c_dim" "$reset"
+    local tmpout="/dev/null"
+    local -a own_tmp=()
+    if (( verbose )); then
+        tmpout=$(mktemp)
+        own_tmp=("$tmpout")
     fi
-    return $rc
-}
 
-# Run a command with a spinner, capturing output on failure.
-# Usage: _ac_spin_verbose "message" command [args...]
-# On success: shows ✓. On failure: shows ✗ and prints captured output.
-_ac_spin_verbose() {
-    local msg="$1"; shift
-    local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local c_dim=$'\e[2m'
-    local c_cyan=$'\e[1;36m'
-    local c_green=$'\e[1;32m'
-    local reset=$'\e[0m'
-    local i=0 pid
-    local tmpout
-    tmpout=$(mktemp)
-
-    # Run command in background, capture output
+    # Run command in background, capturing output only when verbose
     "$@" >"$tmpout" 2>&1 &
     pid=$!
 
@@ -350,13 +404,28 @@ _ac_spin_verbose() {
         printf "  %s✓%s %s\n" "$c_green" "$reset" "$msg"
     else
         printf "  %s✗%s %s %s(failed)%s\n" $'\e[1;31m' "$reset" "$msg" "$c_dim" "$reset"
-        # Show captured output on failure
-        while IFS= read -r line; do
-            printf "    %s%s%s\n" "$c_dim" "$line" "$reset"
-        done < "$tmpout"
+        if (( verbose )); then
+            # Show captured output on failure
+            while IFS= read -r line; do
+                printf "    %s%s%s\n" "$c_dim" "$line" "$reset"
+            done < "$tmpout"
+        fi
     fi
-    rm -f "$tmpout"
+    (( ${#own_tmp[@]} > 0 )) && rm -f "${own_tmp[@]}"
     return $rc
+}
+
+# Run a command with a spinner indicator. Output is always suppressed.
+# Usage: _ac_spin "message" command [args...]
+_ac_spin() {
+    _ac_spin_run 0 "$@"
+}
+
+# Run a command with a spinner, capturing output on failure.
+# Usage: _ac_spin_verbose "message" command [args...]
+# On success: shows ✓. On failure: shows ✗ and prints captured output.
+_ac_spin_verbose() {
+    _ac_spin_run 1 "$@"
 }
 
 _AC_CONFIG_FILE="${HOME}/.config/anycli/config.yaml"
@@ -411,13 +480,22 @@ _ac_yaml_unquote() {
     printf '%s' "$v"
 }
 
+# Portable mtime (epoch seconds) of a file, or "" if it doesn't exist. Used by
+# hot loops to skip a redundant _ac_load_config (full YAML re-parse + legacy
+# migration scan) when the config file hasn't changed since it was last read.
+_ac_file_mtime() {
+    local f="${1:-}"
+    [[ -f "$f" ]] || { printf ''; return 0; }
+    stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || printf '0'
+}
+
 _ac_load_config() {
     # Defaults
     _AC_PROJECTS_DIR="${HOME}/projects"
     _AC_CLI_FLAGS=""
     # No privileged default CLI -- anycli launches whatever tool is
     # configured (via the first-run wizard or config.yaml's cli_tool), not
-    # one AI CLI singled out over the others in _AC_KNOWN_CLIS.
+    # one AI CLI singled out over the others in _AC_CLIS.
     _AC_CLI_TOOL=""
     _AC_CLI_LAUNCH=""
     _AC_AUTO_UPDATE_CHECK="true"
@@ -427,22 +505,12 @@ _ac_load_config() {
     _AC_SHOW_GIT_STATUS="false"
     _AC_SHOW_SESSIONS="false"
     _AC_EXTRA_DIRS=()
-    # Clear per-project flags/color/title
-    local varname
-    for varname in $(_ac_vars_with_prefix _AC_CLI_FLAGS_); do
-        unset "$varname"
-    done
-    for varname in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_); do
-        unset "$varname"
-    done
-    for varname in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_); do
-        unset "$varname"
-    done
-    for varname in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do
-        unset "$varname"
-    done
-    for varname in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do
-        unset "$varname"
+    # Clear per-project flags/color/title/prompt/alias
+    local varname prefix
+    for prefix in "${_AC_PROJ_PROP_PREFIXES[@]}"; do
+        for varname in $(_ac_vars_with_prefix "$prefix"); do
+            unset "$varname"
+        done
     done
     _AC_PROJ_NAME=()
     for varname in $(_ac_vars_with_prefix _AC_APP_); do
@@ -508,8 +576,13 @@ _ac_migrate_legacy() {
     # Write new YAML config
     _ac_write_config
 
-    # Rename old file so migration doesn't repeat
-    mv "$legacy_file" "${legacy_file}.bak" 2>/dev/null
+    # Rename old file so migration doesn't repeat -- but only once the new
+    # config actually landed. A failed or truncated write (disk full,
+    # permissions) previously still renamed the legacy file away, leaving
+    # neither a working config nor a way to retry the migration next run.
+    if [[ -s "$_AC_CONFIG_FILE" ]] && grep -q '^projects_dir:' "$_AC_CONFIG_FILE" 2>/dev/null; then
+        mv "$legacy_file" "${legacy_file}.bak" 2>/dev/null
+    fi
 }
 
 _ac_parse_yaml() {
@@ -680,11 +753,130 @@ _ac_get_flags() {
     fi
 }
 
+# Emit the tab-launch script to stdout: a self-deleting bash script that sets
+# the tab title, cd's into the project, drains stray terminal-handshake bytes,
+# and execs the CLI. Pure (writes nothing to disk itself) so its content can
+# be tested by capturing stdout, rather than writing a real temp file and
+# reading it back through a mocked wt.exe.
+#
+# Args: <script_file> <title> <dir> <launch_argv...>
+#   script_file  the path this script will be written to by the caller --
+#                used only for its own self-delete line
+#   title        tab title (emitted as an OSC 0 escape), or empty for none
+#   dir          project directory to cd into
+#   launch_argv  the fully-resolved argv to exec (CLI binary path, launch
+#                subcommand, resume/picker flag, split flags, prompt)
+_ac_emit_tab_script() {
+    local script_file="$1" title="$2" dir="$3"
+    shift 3
+    local -a launch_argv=("$@")
+
+    # Every interpolated value is shell-quoted with printf %q so that directory
+    # names, titles, and prompts containing quotes or shell metacharacters are
+    # passed as literal data and cannot inject commands.
+    #
+    # The script removes itself as its first action rather than its last: the
+    # final command runs via exec, so anything after it would never run.
+    printf '#!/usr/bin/env bash\n'
+    printf 'rm -f -- %q\n' "$script_file"
+    printf 'export _AC_SPAWNED_TAB=1\n'
+    if [[ -n "$title" ]]; then
+        printf 'printf %q\n' "$(printf '\e]0;%s\a' "$title")"
+    fi
+    printf 'cd %q || exit 1\n' "$dir"
+    # Drain any pending terminal-reply bytes (device-attribute / cursor-position
+    # / OSC color-query responses from the wt.exe tab handshake) so they don't
+    # leak into the CLI's prompt buffer as stray input (e.g. "2c/3434") on
+    # launch.
+    #
+    # A single fixed-timeout read is not enough: the handshake replies arrive
+    # asynchronously and can land *after* one read window closes. Instead we
+    # put the TTY into raw, no-echo mode and drain in a loop, giving the
+    # terminal an initial settle window and continuing until an iteration
+    # reads zero bytes. The TTY state is always restored before exec so the
+    # CLI inherits a clean terminal.
+    # The single quotes below are intentional: these printf calls emit
+    # literal shell code into the generated tab script. Variables like
+    # $_saved and $_junk must NOT expand at generation time — they belong
+    # to the spawned script's runtime. (SC2016 suppressed in .shellcheckrc.)
+    printf '%s\n' '_ac_drain_tty() {'
+    printf '%s\n' '    [[ -t 0 ]] || return 0'
+    printf '%s\n' '    local _saved'
+    printf '%s\n' '    _saved="$(stty -g 2>/dev/null)" || return 0'
+    printf '%s\n' '    trap '\''stty "$_saved" 2>/dev/null'\'' INT TERM'
+    printf '%s\n' '    stty raw -echo min 0 time 0 2>/dev/null'
+    printf '%s\n' '    # Let the wt.exe tab handshake replies arrive.'
+    printf '%s\n' '    sleep 0.15'
+    printf '%s\n' '    local _junk _i'
+    printf '%s\n' '    for ((_i=0; _i<50; _i++)); do'
+    printf '%s\n' '        _junk=""'
+    printf '%s\n' '        IFS= read -r -t 0.05 -n 4096 _junk 2>/dev/null'
+    printf '%s\n' '        [[ -z "$_junk" ]] && break'
+    printf '%s\n' '    done'
+    printf '%s\n' '    trap - INT TERM'
+    printf '%s\n' '    stty "$_saved" 2>/dev/null'
+    printf '%s\n' '}'
+    printf '%s\n' '_ac_drain_tty'
+    printf 'exec'
+    printf ' %q' "${launch_argv[@]}"
+    printf '\n'
+}
+
+# Build the wt.exe invocation for opening a new tab, into the global array
+# _AC_WT_ARGS. A pure function of its arguments plus _ac_platform() (no
+# filesystem or process side effects), so each platform's exact argv can be
+# asserted directly instead of mocking wt.exe and grepping a captured log.
+#
+# Args: <dir> <script_file> <title> <color>
+# Reads: $WT_PROFILE_ID, $WSL_DISTRO_NAME (both optional, same as before this
+# was extracted) and the platform from _ac_platform().
+_ac_build_wt_invocation() {
+    local dir="$1" script_file="$2" title="$3" color="$4"
+    _AC_WT_ARGS=("-w" "0" "new-tab")
+    [[ -n "${WT_PROFILE_ID:-}" ]] && _AC_WT_ARGS+=("--profile" "$WT_PROFILE_ID")
+    [[ -n "$title" ]] && _AC_WT_ARGS+=("--title" "$title")
+    [[ -n "$color" ]] && _AC_WT_ARGS+=("--tabColor" "$color")
+
+    # Platform-specific wt.exe invocation. See _ac_platform for the single
+    # detection seam every platform-specific branch in the file shares.
+    case "$(_ac_platform)" in
+        wsl)
+            local distro="${WSL_DISTRO_NAME:-Ubuntu}"
+            # Do NOT pin wt.exe's --startingDirectory to a \\wsl.localhost\...
+            # UNC path: WSL cannot set its working directory to a UNC path, so
+            # wsl.exe fails with "Wsl/ERROR_PATH_NOT_FOUND" before the tab
+            # script runs. Instead pass the Linux path to `wsl.exe --cd`,
+            # which is the supported way to set a WSL invocation's working
+            # directory. The generated script also `cd`s to the project as a
+            # belt-and-braces fallback.
+            _AC_WT_ARGS+=("wsl.exe" "-d" "$distro" "--cd" "$dir" "--" "bash" "-l" "$script_file")
+            ;;
+        gitbash)
+            # Git Bash on native Windows — convert paths for wt.exe (Windows process)
+            # Use env to set _AC_SPAWNED_TAB BEFORE bash sources .bashrc
+            # Use -- to separate wt.exe options from the command
+            local win_script win_bash win_env win_dir
+            win_script="$(cygpath -w "$script_file" 2>/dev/null || echo "$script_file")"
+            win_bash="$(cygpath -w "$(command -v bash)" 2>/dev/null || echo "bash")"
+            win_env="$(cygpath -w "$(command -v env)" 2>/dev/null || echo "env")"
+            # Pin the starting directory to the project (Windows path) so a stale
+            # Windows Terminal default-profile startingDirectory cannot break the
+            # launch with "Could not access starting directory" (error 0x8007010b).
+            win_dir="$(cygpath -w "$dir" 2>/dev/null || true)"
+            [[ -n "$win_dir" ]] && _AC_WT_ARGS+=("--startingDirectory" "$win_dir")
+            _AC_WT_ARGS+=("--" "$win_env" "_AC_SPAWNED_TAB=1" "$win_bash" "-l" "$win_script")
+            ;;
+        *)
+            _AC_WT_ARGS+=("bash" "-l" "$script_file")
+            ;;
+    esac
+    return 0
+}
+
 _ac_launch_project() {
-    local dir="$1"
+    local dir="${1%/}"
     local resume="${2:-}"
-    local dirname
-    dirname="$(basename "$dir")"
+    local dirname="${dir##*/}"
     # Track usage so the menu can offer recency ordering
     _ac_record_launch "$dirname"
     local safe
@@ -719,14 +911,15 @@ _ac_launch_project() {
 
     # Build the script to run in the new tab.
     #
-    # Resolve the CLI to a real executable path with `type -P`, NOT `command -v`.
-    # When the tool name is shadowed by a shell alias (e.g. a security wrapper
-    # aliases `kiro-cli` to `kiro-guard`), `command -v kiro-cli` prints the alias
-    # definition text ("alias kiro-cli='kiro-guard'"), and exec-ing that literal
-    # fails with "exec: alias ...: not found" (exit 127). `type -P` only ever
-    # yields an executable path, ignoring aliases and functions.
+    # Resolve the CLI to a real executable path via _ac_resolve_bin, NOT
+    # `command -v`. When the tool name is shadowed by a shell alias (e.g. a
+    # security wrapper aliases `kiro-cli` to `kiro-guard`), `command -v
+    # kiro-cli` prints the alias definition text ("alias kiro-cli='kiro-guard'"),
+    # and exec-ing that literal fails with "exec: alias ...: not found" (exit
+    # 127). _ac_resolve_bin only ever yields an executable path, ignoring
+    # aliases and functions.
     local cli_bin
-    cli_bin="$(type -P "$_AC_CLI_TOOL" 2>/dev/null)"
+    cli_bin="$(_ac_resolve_bin "$_AC_CLI_TOOL")"
     if [[ -z "$cli_bin" ]]; then
         # No executable on PATH (name may only be a shell alias/function, which a
         # non-interactive tab cannot use). Fall back to running in the current tab.
@@ -742,13 +935,7 @@ _ac_launch_project() {
     script_file="$(mktemp "${TMPDIR:-/tmp}/ac-tab-XXXXXXXX.sh" 2>/dev/null)" || return 1
     chmod 700 "$script_file" 2>/dev/null
 
-    # Every interpolated value is shell-quoted with printf %q so that directory
-    # names, titles, and prompts containing quotes or shell metacharacters are
-    # passed as literal data and cannot inject commands.
-    #
-    # The script removes itself as its first action rather than its last: the
-    # final command runs via exec, so anything after it would never run.
-    # argv[0] is the resolved executable path from `type -P`. The spawned tab
+    # argv[0] is the resolved executable path from _ac_resolve_bin. The spawned tab
     # runs a NON-interactive `bash -l`, and .bashrc's standard interactive guard
     # (`case $- in *) return;;`) returns before user aliases are defined — so the
     # security-wrapper alias (kiro-cli -> kiro-guard) is not available in the tab
@@ -773,96 +960,15 @@ _ac_launch_project() {
         fi
     fi
     _ac_split_flags "$flags"
-    launch_argv+=("${_AC_FLAG_ARGV[@]}")
+    launch_argv+=("${_AC_FLAG_ARGV[@]+"${_AC_FLAG_ARGV[@]}"}")
     [[ -n "$prompt" ]] && launch_argv+=("$prompt")
 
-    {
-        printf '#!/usr/bin/env bash\n'
-        printf 'rm -f -- %q\n' "$script_file"
-        printf 'export _AC_SPAWNED_TAB=1\n'
-        if [[ -n "$title" ]]; then
-            printf 'printf %q\n' "$(printf '\e]0;%s\a' "$title")"
-        fi
-        printf 'cd %q || exit 1\n' "$dir"
-        # Drain any pending terminal-reply bytes (device-attribute / cursor-position
-        # / OSC color-query responses from the wt.exe tab handshake) so they don't
-        # leak into the CLI's prompt buffer as stray input (e.g. "2c/3434") on
-        # launch.
-        #
-        # A single fixed-timeout read is not enough: the handshake replies arrive
-        # asynchronously and can land *after* one read window closes. Instead we
-        # put the TTY into raw, no-echo mode and drain in a loop, giving the
-        # terminal an initial settle window and continuing until an iteration
-        # reads zero bytes. The TTY state is always restored before exec so the
-        # CLI inherits a clean terminal.
-        # The single quotes below are intentional: these printf calls emit
-        # literal shell code into the generated tab script. Variables like
-        # $_saved and $_junk must NOT expand at generation time — they belong
-        # to the spawned script's runtime. (SC2016 suppressed in .shellcheckrc.)
-        printf '%s\n' '_ac_drain_tty() {'
-        printf '%s\n' '    [[ -t 0 ]] || return 0'
-        printf '%s\n' '    local _saved'
-        printf '%s\n' '    _saved="$(stty -g 2>/dev/null)" || return 0'
-        printf '%s\n' '    trap '\''stty "$_saved" 2>/dev/null'\'' INT TERM'
-        printf '%s\n' '    stty raw -echo min 0 time 0 2>/dev/null'
-        printf '%s\n' '    # Let the wt.exe tab handshake replies arrive.'
-        printf '%s\n' '    sleep 0.15'
-        printf '%s\n' '    local _junk _i'
-        printf '%s\n' '    for ((_i=0; _i<50; _i++)); do'
-        printf '%s\n' '        _junk=""'
-        printf '%s\n' '        IFS= read -r -t 0.05 -n 4096 _junk 2>/dev/null'
-        printf '%s\n' '        [[ -z "$_junk" ]] && break'
-        printf '%s\n' '    done'
-        printf '%s\n' '    trap - INT TERM'
-        printf '%s\n' '    stty "$_saved" 2>/dev/null'
-        printf '%s\n' '}'
-        printf '%s\n' '_ac_drain_tty'
-        printf 'exec'
-        printf ' %q' "${launch_argv[@]}"
-        printf '\n'
-    } > "$script_file"
+    _ac_emit_tab_script "$script_file" "$title" "$dir" "${launch_argv[@]}" > "$script_file"
     chmod +x "$script_file"
 
-    # Build wt.exe args
-    local -a wt_args=("-w" "0" "new-tab")
-    [[ -n "${WT_PROFILE_ID:-}" ]] && wt_args+=("--profile" "$WT_PROFILE_ID")
-    [[ -n "$title" ]] && wt_args+=("--title" "$title")
-    [[ -n "$color" ]] && wt_args+=("--tabColor" "$color")
+    _ac_build_wt_invocation "$dir" "$script_file" "$title" "$color"
 
-    # Detect platform: WSL, Git Bash (MINGW/MSYS), or native Unix
-    local is_wsl="${_AC_IS_WSL:-}"
-    if [[ -z "$is_wsl" ]]; then
-        [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null && is_wsl=1 || is_wsl=0
-    fi
-
-    if [[ "$is_wsl" == "1" ]]; then
-        local distro="${WSL_DISTRO_NAME:-Ubuntu}"
-        # Do NOT pin wt.exe's --startingDirectory to a \\wsl.localhost\... UNC
-        # path: WSL cannot set its working directory to a UNC path, so wsl.exe
-        # fails with "Wsl/ERROR_PATH_NOT_FOUND" before the tab script runs.
-        # Instead pass the Linux path to `wsl.exe --cd`, which is the supported
-        # way to set a WSL invocation's working directory. The generated script
-        # also `cd`s to the project as a belt-and-braces fallback.
-        wt_args+=("wsl.exe" "-d" "$distro" "--cd" "$dir" "--" "bash" "-l" "$script_file")
-    elif [[ "${MSYSTEM:-}" =~ ^(MINGW|MSYS|UCRT) || "$(uname -s 2>/dev/null)" == MINGW* ]]; then
-        # Git Bash on native Windows — convert paths for wt.exe (Windows process)
-        # Use env to set _AC_SPAWNED_TAB BEFORE bash sources .bashrc
-        # Use -- to separate wt.exe options from the command
-        local win_script win_bash win_env win_dir
-        win_script="$(cygpath -w "$script_file" 2>/dev/null || echo "$script_file")"
-        win_bash="$(cygpath -w "$(which bash)" 2>/dev/null || echo "bash")"
-        win_env="$(cygpath -w "$(which env)" 2>/dev/null || echo "env")"
-        # Pin the starting directory to the project (Windows path) so a stale
-        # Windows Terminal default-profile startingDirectory cannot break the
-        # launch with "Could not access starting directory" (error 0x8007010b).
-        win_dir="$(cygpath -w "$dir" 2>/dev/null || true)"
-        [[ -n "$win_dir" ]] && wt_args+=("--startingDirectory" "$win_dir")
-        wt_args+=("--" "$win_env" "_AC_SPAWNED_TAB=1" "$win_bash" "-l" "$win_script")
-    else
-        wt_args+=("bash" "-l" "$script_file")
-    fi
-
-    "$_AC_WT_BIN" "${wt_args[@]}" 2>/dev/null &
+    "$_AC_WT_BIN" "${_AC_WT_ARGS[@]}" 2>/dev/null &
     disown
     _AC_LAUNCHED_NEW_TAB=1
 }
@@ -896,31 +1002,13 @@ _ac_write_config() {
         # Collect all projects that have any config (using assoc array as set)
         local -A _ac_seen=()
         local -a _ac_all_projects=()
-        local varname p
-        for varname in $(_ac_vars_with_prefix _AC_CLI_FLAGS_); do
-            p="${varname#_AC_CLI_FLAGS_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
-        done
-        for varname in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_); do
-            p="${varname#_AC_PROJECT_COLOR_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
-        done
-        for varname in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_); do
-            p="${varname#_AC_PROJECT_TITLE_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
-        done
-        for varname in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do
-            p="${varname#_AC_PROJECT_PROMPT_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
-        done
-        for varname in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do
-            p="${varname#_AC_PROJECT_ALIAS_}"
-            [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
-            _ac_seen[$p]=1
+        local varname p prefix
+        for prefix in "${_AC_PROJ_PROP_PREFIXES[@]}"; do
+            for varname in $(_ac_vars_with_prefix "$prefix"); do
+                p="${varname#"$prefix"}"
+                [[ -z "${_ac_seen[$p]+x}" ]] && _ac_all_projects+=("$p")
+                _ac_seen[$p]=1
+            done
         done
         for proj in "${_ac_all_projects[@]:-}"; do
             [[ -z "$proj" ]] && continue
@@ -964,49 +1052,48 @@ _ac_write_config() {
 }
 
 # --- CLI Detection and Flag Parsing ---
-_AC_KNOWN_CLIS=(
-    "kiro-cli:chat"
-    "claude:"
-    "aider:"
-    "goose:session"
-    "codex:"
-    "amp:"
-)
-
-# Per-CLI resume capabilities.
-# Format: tool | resume-flag | list-sessions-argv | picker-flag
+# Every known AI CLI, one row per tool, single source of truth for both "what
+# tools does the wizard offer" and "what can this tool do". Previously these
+# were two separate tables (_AC_KNOWN_CLIS keyed by ":", _AC_CLI_CAPS keyed by
+# "|") that had to be kept in sync by hand -- a tool added to one and not the
+# other silently lost either its default launch subcommand or its resume
+# capabilities.
+#
+# Format: tool|default-subcmd|resume-flag|list-sessions-argv|picker-flag
+#   - default-subcmd: launch subcommand offered by the setup wizard (empty = none)
 #   - resume-flag: flag to resume the most recent conversation (empty = none)
 #   - list-sessions-argv: space-separated argv to list sessions as JSON (empty = none)
 #   - picker-flag: flag to interactively pick a session to resume (empty = none)
-# Empty fields mean the tool lacks that capability; the launcher never emits an
-# unsupported flag and hides the corresponding trigger.
+# Empty capability fields mean the tool lacks that capability; the launcher
+# never emits an unsupported flag and hides the corresponding trigger.
 #
 # claude is TO-VERIFY: --continue resumes the most recent conversation per its
 # public docs, but this has not been confirmed against a local install. Its
 # list-sessions command and picker flag are unknown, so session-aware menu
 # entries and the picker are disabled for claude until verified.
-_AC_CLI_CAPS=(
-    "kiro-cli|--resume|chat --list-sessions --format json|--resume-picker"
-    "claude|--continue||"
-    "aider|||"
-    "goose|--resume||"
-    "codex|||"
-    "amp|||"
+_AC_CLIS=(
+    "kiro-cli|chat|--resume|chat --list-sessions --format json|--resume-picker"
+    "claude||--continue||"
+    "aider||||"
+    "goose|session|--resume||"
+    "codex||||"
+    "amp||||"
 )
 
-# Split a capability entry into fields. Sets _AC_CAP_FIELDS (indexed 0..3):
-# 0=tool 1=resume-flag 2=list-argv 3=picker-flag. Returns 1 if not found.
-_ac_cli_caps_fields() {
+# Split a tool's row into fields. Sets _AC_CLI_FIELDS (indexed 0..4):
+# 0=tool 1=subcmd 2=resume-flag 3=list-argv 4=picker-flag. Returns 1 if the
+# tool isn't in the table.
+_ac_cli_fields() {
     local tool="${1:-}" entry
-    _AC_CAP_FIELDS=()
-    for entry in "${_AC_CLI_CAPS[@]}"; do
+    _AC_CLI_FIELDS=()
+    for entry in "${_AC_CLIS[@]}"; do
         if [[ "${entry%%|*}" == "$tool" ]]; then
             local IFS='|'
             # zsh's `read` splits into an array with -A, not bash's -a.
             if [[ -n "${ZSH_VERSION:-}" ]]; then
-                read -rA _AC_CAP_FIELDS <<< "$entry"
+                read -rA _AC_CLI_FIELDS <<< "$entry"
             else
-                read -ra _AC_CAP_FIELDS <<< "$entry"
+                read -ra _AC_CLI_FIELDS <<< "$entry"
             fi
             return 0
         fi
@@ -1016,31 +1103,32 @@ _ac_cli_caps_fields() {
 
 # Print the resume flag for a tool, or nothing if resume is unsupported.
 _ac_cli_resume_flag() {
-    _ac_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_AC_CAP_FIELDS[1]:-}"
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[2]:-}"
     return 0
 }
 
 # Print the list-sessions argv (space-separated) for a tool, or nothing if the
 # tool has no session-listing capability.
 _ac_cli_list_argv() {
-    _ac_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_AC_CAP_FIELDS[2]:-}"
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[3]:-}"
     return 0
 }
 
 # Print the picker flag for a tool, or nothing if the tool has no session picker.
 _ac_cli_picker_flag() {
-    _ac_cli_caps_fields "${1:-}" || return 0
-    printf '%s' "${_AC_CAP_FIELDS[3]:-}"
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[4]:-}"
     return 0
 }
 
 _ac_detect_clis() {
     # Returns list of available CLI tools on PATH
     local -a found=()
-    for entry in "${_AC_KNOWN_CLIS[@]}"; do
-        local tool="${entry%%:*}"
+    local entry
+    for entry in "${_AC_CLIS[@]}"; do
+        local tool="${entry%%|*}"
         if command -v "$tool" &>/dev/null; then
             found+=("$tool")
         fi
@@ -1050,15 +1138,8 @@ _ac_detect_clis() {
 
 _ac_get_default_launch() {
     # Get the default launch subcommand for a tool
-    local tool="$1"
-    for entry in "${_AC_KNOWN_CLIS[@]}"; do
-        local t="${entry%%:*}"
-        local subcmd="${entry#*:}"
-        if [[ "$t" == "$tool" ]]; then
-            echo "$subcmd"
-            return
-        fi
-    done
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[1]:-}"
 }
 
 _ac_parse_cli_flags() {
@@ -1121,10 +1202,15 @@ _ac_parse_cli_flags() {
 
     # Deduplicate and sort, remove --help/--version
     local flags
-    flags=$(echo "$results" | sort -u | grep -v '^--help' | grep -v '^--version' | grep -v '^$')
+    flags=$(sort -u <<< "$results" | grep -v '^--help' | grep -v '^--version' | grep -v '^$')
 
-    # Cache results
-    echo "$flags" > "$cache"
+    # Cache results. Written atomically (temp file + mv) so a concurrent `ac`
+    # invocation reading the cache never sees a half-written file.
+    local tmp_cache
+    tmp_cache="$(mktemp "${cache}.XXXXXX" 2>/dev/null)" && {
+        echo "$flags" > "$tmp_cache"
+        mv "$tmp_cache" "$cache" 2>/dev/null || rm -f "$tmp_cache"
+    }
     echo "$flags"
 }
 
@@ -1308,7 +1394,17 @@ _ac_theme_field() {
 }
 
 _ac_find_python() {
-    # Find a working Python interpreter
+    # Find a working Python interpreter.
+    #
+    # Deliberately does NOT cache itself: every call site invokes this via
+    # command substitution (`python_bin=$(_ac_find_python)`), which forks a
+    # subshell -- any variable this function assigned would be set only in
+    # that subshell and vanish the instant the substitution completes,
+    # making an internal cache a no-op that looks like it works but never
+    # actually avoids re-detection. Callers that want caching (see the
+    # _AC_WT_BIN pattern in _ac_launch_project) must cache the *result* of
+    # the substitution themselves, in their own scope.
+    #
     # Must verify execution because Windows Store stubs pass 'command -v' but fail at runtime
     if command -v python3 &>/dev/null && python3 --version &>/dev/null; then
         echo "python3"
@@ -1466,6 +1562,54 @@ def profile_key(profile, index):
 # restores what the user had rather than deleting the field outright.
 _AC_WT_SCHEME_BACKUP="${HOME}/.config/anycli/wt-schemes.json"
 
+# Detect the two prerequisites every Windows Terminal settings.json mutation
+# needs: the settings file itself, and a working Python interpreter to edit
+# it with. On success sets _AC_WT_SETTINGS / _AC_WT_PYTHON and returns 0. On
+# failure returns 1 and sets exactly one of _AC_WT_SETTINGS_MISSING /
+# _AC_WT_PYTHON_MISSING so the caller can report which one -- callers differ
+# in what they do after a failure (some just return, the font/opacity editor
+# shows a "press any key" prompt first), so this only detects; it prints
+# nothing itself. Pair with _ac_wt_prereqs_fail_msg for the standard message.
+_ac_wt_prereqs() {
+    _AC_WT_SETTINGS=""
+    _AC_WT_PYTHON=""
+    _AC_WT_SETTINGS_MISSING=""
+    _AC_WT_PYTHON_MISSING=""
+    _AC_WT_SETTINGS="$(_ac_detect_wt_settings)"
+    if [[ -z "$_AC_WT_SETTINGS" ]]; then
+        _AC_WT_SETTINGS_MISSING=1
+        return 1
+    fi
+    _AC_WT_PYTHON="$(_ac_find_python)"
+    if [[ -z "$_AC_WT_PYTHON" ]]; then
+        _AC_WT_PYTHON_MISSING=1
+        return 1
+    fi
+    return 0
+}
+
+# Print the bare (uncolored, unprefixed) description of whichever
+# _ac_wt_prereqs check just failed. Deliberately bare, not "✗ Failed: ...":
+# _ac_apply_theme_windows and _ac_reset_theme_windows are always invoked as
+# `result=$(... 2>&1)` by _ac_config_theme, which itself prints
+# "✗ Failed: %s" around whatever they produced -- a caller-supplied "✗
+# Failed:" here would double up into "✗ Failed:   ✗ Failed: ...", which is
+# in fact what _ac_apply_theme_windows's Python-missing message used to
+# print before this was unified. Callers that display the message directly
+# instead of returning it for another layer to wrap (_ac_config_theme_font)
+# add their own "✗ Failed: %s" around the captured text, matching the same
+# visual result.
+# Must be called right after a failing _ac_wt_prereqs, before either
+# _AC_WT_SETTINGS_MISSING or _AC_WT_PYTHON_MISSING is overwritten.
+_ac_wt_prereqs_fail_msg() {
+    if [[ -n "$_AC_WT_SETTINGS_MISSING" ]]; then
+        printf "Could not find Windows Terminal settings.json\n"
+    else
+        printf "Python was not found. Install Python 3 or disable the Windows Store alias\n"
+        printf "    (Settings > Apps > Advanced app settings > App execution aliases)."
+    fi
+}
+
 _ac_apply_theme_windows() {
     # Apply theme to Windows Terminal settings.json
     local theme_entry="$1"
@@ -1475,21 +1619,12 @@ _ac_apply_theme_windows() {
     fg=$(_ac_theme_field "$theme_entry" 2)
     cursor=$(_ac_theme_field "$theme_entry" 3)
 
-    local settings
-    settings=$(_ac_detect_wt_settings)
-    if [[ -z "$settings" ]]; then
-        printf "  ✗ Could not find Windows Terminal settings.json\n"
-        return 1
-    fi
-
     # Build the color scheme JSON using python (available in WSL and Git Bash)
-    local python_bin
-    python_bin=$(_ac_find_python)
-    if [[ -z "$python_bin" ]]; then
-        printf "  \e[31m✗ Failed: Python was not found. Install Python 3 or disable the Windows Store alias\n"
-        printf "    (Settings > Apps > Advanced app settings > App execution aliases).\e[0m\n"
+    if ! _ac_wt_prereqs; then
+        _ac_wt_prereqs_fail_msg
         return 1
     fi
+    local settings="$_AC_WT_SETTINGS" python_bin="$_AC_WT_PYTHON"
     mkdir -p "$(dirname "$_AC_WT_SCHEME_BACKUP")"
     "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]
@@ -1550,20 +1685,11 @@ print("OK:" + name)
 
 _ac_reset_theme_windows() {
     # Remove custom colorScheme from Windows Terminal, restoring defaults
-    local settings
-    settings=$(_ac_detect_wt_settings)
-    if [[ -z "$settings" ]]; then
-        printf "Could not find Windows Terminal settings.json"
+    if ! _ac_wt_prereqs; then
+        _ac_wt_prereqs_fail_msg
         return 1
     fi
-
-    local python_bin
-    python_bin=$(_ac_find_python)
-    if [[ -z "$python_bin" ]]; then
-        printf "Python was not found. Install Python 3 or disable the Windows Store alias\n"
-        printf "    (Settings > Apps > Advanced app settings > App execution aliases)."
-        return 1
-    fi
+    local settings="$_AC_WT_SETTINGS" python_bin="$_AC_WT_PYTHON"
     "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]
 scheme_backup_path = sys.argv[2]
@@ -1776,7 +1902,7 @@ _ac_config_theme() {
         fi
 
         printf "\n  %sPress any key to continue...%s " "$c_dim" "$reset"
-        read -r -n 1
+        _ac_pause
     done
 }
 
@@ -1831,24 +1957,13 @@ _ac_config_theme_font() {
 
     # Apply via python
     if [[ -n "$selected_font" || -n "$opacity_val" ]]; then
-        local settings
-        settings=$(_ac_detect_wt_settings)
-        if [[ -z "$settings" ]]; then
-            printf "  ✗ Could not find Windows Terminal settings.json\n"
+        if ! _ac_wt_prereqs; then
+            printf "  \e[31m✗ Failed: %s\e[0m\n" "$(_ac_wt_prereqs_fail_msg)"
             printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-            read -r -n 1
+            _ac_pause
             return
         fi
-
-        local python_bin
-        python_bin=$(_ac_find_python)
-        if [[ -z "$python_bin" ]]; then
-            printf "  \e[31m✗ Failed: Python was not found. Install Python 3 or disable the Windows Store alias\n"
-            printf "    (Settings > Apps > Advanced app settings > App execution aliases).\e[0m\n"
-            printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-            read -r -n 1
-            return
-        fi
+        local settings="$_AC_WT_SETTINGS" python_bin="$_AC_WT_PYTHON"
 
         "$python_bin" -c "$_AC_WT_PY_PRELUDE"'
 settings_path = sys.argv[1]
@@ -1894,7 +2009,7 @@ print("OK")
     fi
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-    read -r -n 1
+    _ac_pause
 }
 
 # Shared project picker for the config editors.
@@ -1916,7 +2031,7 @@ _ac_config_pick_project() {
     if (( ${#names[@]} == 0 )); then
         printf "\n    %s(no projects found in %s)%s\n" "$c_dim" "$_AC_PROJECTS_DIR" "$reset"
         printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-        read -r -n 1
+        _ac_pause
         return 1
     fi
 
@@ -2053,8 +2168,20 @@ _ac_config_edit_project_style() {
 
 # --- Config Submenu ---
 _ac_config_menu() {
+    local _ac_cfg_mtime="" _ac_cfg_loaded=0 _ac_cfg_mtime_now
     while true; do
-        _ac_load_config
+        # Skip the reload (full YAML re-parse + legacy migration scan) when
+        # the config file hasn't changed since last read -- most submenu
+        # actions already updated these variables directly before writing, so
+        # re-reading from disk right after is redundant; this only re-reads
+        # when something (a submenu write, or an external edit) actually
+        # touched the file.
+        _ac_cfg_mtime_now="$(_ac_file_mtime "$_AC_CONFIG_FILE")"
+        if (( ! _ac_cfg_loaded )) || [[ "$_ac_cfg_mtime_now" != "$_ac_cfg_mtime" ]]; then
+            _ac_load_config
+            _ac_cfg_mtime="$_ac_cfg_mtime_now"
+            _ac_cfg_loaded=1
+        fi
         _ac_clear
 
         local reset=$'\e[0m'
@@ -2135,13 +2262,28 @@ _ac_config_menu() {
     done
 }
 
+# Normalize a user-typed projects-directory path: expand a leading "~" to
+# $HOME, and (Git Bash) convert a pasted native Windows path like
+# C:\Users\me\code to its Unix form via cygpath -- bash cannot cd into a
+# backslash path. Prints the normalized path; the caller decides what to do
+# if it still doesn't exist. Shared by every prompt that accepts a
+# projects-directory path (first-run wizard, `ac setup`, the config menu).
+_ac_normalize_typed_path() {
+    local p="${1:-}"
+    case "$p" in "~"*) p="${HOME}${p#"~"}" ;; esac
+    if [[ "$p" == *\\* || "$p" =~ ^[A-Za-z]:[/\\] ]] && command -v cygpath >/dev/null 2>&1; then
+        p="$(cygpath -u "$p" 2>/dev/null || printf '%s' "$p")"
+    fi
+    printf '%s' "$p"
+}
+
 _ac_config_edit_projects_dir() {
     printf "\n  Current: %s\n" "$_AC_PROJECTS_DIR"
     printf "  New value (blank to keep): "
     local val
     read -r val
     if [[ -n "$val" ]]; then
-        case "$val" in "~"*) val="${HOME}${val#"~"}" ;; esac
+        val="$(_ac_normalize_typed_path "$val")"
         if [[ ! -d "$val" ]]; then
             printf "  Warning: directory does not exist: %s\n" "$val"
             printf "  Save anyway? (y/n): "
@@ -2158,6 +2300,34 @@ _ac_config_edit_projects_dir() {
     else
         printf "  — No changes\n"
     fi
+}
+
+# Resolve a chosen entry from _ac_get_flag_opts's output into the flag text
+# to add, prompting for a value when the entry needs one. Sets _AC_NEW_FLAG
+# (empty when nothing should be added -- "none (use default)" was chosen, or
+# "custom"/a parameterized flag was chosen but nothing was typed). Shared by
+# _ac_config_edit_default_flags and _ac_config_edit_project_flags, whose
+# flag-picker loops were otherwise identical.
+_ac_resolve_chosen_flag() {
+    local chosen="$1"
+    _AC_NEW_FLAG=""
+    if [[ "$chosen" == "custom" ]]; then
+        printf "  Enter flag: "
+        read -r _AC_NEW_FLAG
+    elif [[ "$chosen" == "none (use default)" ]]; then
+        return 0
+    elif [[ "$chosen" == *"=<"* ]]; then
+        local flag_name="${chosen%%=<*}"
+        local param_hint="${chosen#*=<}"
+        param_hint="${param_hint%>}"
+        printf "  Enter value for %s (%s): " "$flag_name" "$param_hint"
+        local param_val
+        read -r param_val
+        [[ -n "$param_val" ]] && _AC_NEW_FLAG="$flag_name $param_val"
+    else
+        _AC_NEW_FLAG="$chosen"
+    fi
+    return 0
 }
 
 _ac_config_edit_default_flags() {
@@ -2206,24 +2376,8 @@ _ac_config_edit_default_flags() {
         fi
 
         local chosen="${flag_opts[$((cnum - 1))]}"
-        local new_flag=""
-
-        if [[ "$chosen" == "custom" ]]; then
-            printf "  Enter flag: "
-            read -r new_flag
-        elif [[ "$chosen" == "none (use default)" ]]; then
-            continue
-        elif [[ "$chosen" == *"=<"* ]]; then
-            local flag_name="${chosen%%=<*}"
-            local param_hint="${chosen#*=<}"
-            param_hint="${param_hint%>}"
-            printf "  Enter value for %s (%s): " "$flag_name" "$param_hint"
-            local param_val
-            read -r param_val
-            [[ -n "$param_val" ]] && new_flag="$flag_name $param_val"
-        else
-            new_flag="$chosen"
-        fi
+        _ac_resolve_chosen_flag "$chosen"
+        local new_flag="$_AC_NEW_FLAG"
 
         if [[ -n "$new_flag" ]]; then
             _AC_CLI_FLAGS="${_AC_CLI_FLAGS:+$_AC_CLI_FLAGS }$new_flag"
@@ -2315,24 +2469,8 @@ _ac_config_edit_project_flags() {
         fi
 
         local chosen="${flag_opts[$((cnum - 1))]}"
-        local new_flag=""
-
-        if [[ "$chosen" == "custom" ]]; then
-            printf "  Enter flag: "
-            read -r new_flag
-        elif [[ "$chosen" == "none (use default)" ]]; then
-            continue
-        elif [[ "$chosen" == *"=<"* ]]; then
-            local flag_name="${chosen%%=<*}"
-            local param_hint="${chosen#*=<}"
-            param_hint="${param_hint%>}"
-            printf "  Enter value for %s (%s): " "$flag_name" "$param_hint"
-            local param_val
-            read -r param_val
-            [[ -n "$param_val" ]] && new_flag="$flag_name $param_val"
-        else
-            new_flag="$chosen"
-        fi
+        _ac_resolve_chosen_flag "$chosen"
+        local new_flag="$_AC_NEW_FLAG"
 
         if [[ -n "$new_flag" ]]; then
             current=""
@@ -2425,7 +2563,7 @@ _ac_show_changelog() {
     fi
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-    read -r -n 1
+    _ac_pause
 }
 
 # Help screen for the menu's less-obvious keys (session resume/picker triggers).
@@ -2457,10 +2595,51 @@ _ac_show_key_help() {
     fi
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-    read -r -n 1
+    _ac_pause
 }
 
 # --- Platform Helpers ---
+
+# Single source of truth for "what platform is this". Echoes exactly one of:
+#   wsl      Windows Subsystem for Linux (Windows Terminal reached via wsl.exe)
+#   gitbash  Git Bash / MSYS2 / MSYS / UCRT on native Windows
+#   macos    macOS
+#   linux    everything else (native Linux, or an unrecognized platform)
+#
+# Real detection (the /proc/version, $MSYSTEM, and `uname -s` probes) is
+# cached in _AC_PLATFORM after the first call within a process, since it
+# can't change mid-process. Every platform-specific branch in the file
+# (new-tab launch mechanism, Windows Terminal settings.json discovery, theme
+# application) should consult this instead of re-deriving platform directly
+# -- that duplication previously meant each call site could disagree, and
+# tests had to mock three different signals (plus shadow `uname` as a
+# function) to force one code path.
+#
+# _AC_PLATFORM_OVERRIDE is the single test seam: set it to force a platform
+# without touching /proc/version, $MSYSTEM, or `uname`. It is checked BEFORE
+# the cache on every call (and is not itself cached into _AC_PLATFORM), so it
+# always wins even after real detection has already run and cached a result.
+_ac_platform() {
+    if [[ -n "${_AC_PLATFORM_OVERRIDE:-}" ]]; then
+        printf '%s' "$_AC_PLATFORM_OVERRIDE"
+        return 0
+    fi
+    if [[ -n "${_AC_PLATFORM:-}" ]]; then
+        printf '%s' "$_AC_PLATFORM"
+        return 0
+    fi
+    if [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+        _AC_PLATFORM="wsl"
+    elif [[ "${MSYSTEM:-}" =~ ^(MINGW|MSYS|UCRT) || "$(uname -s 2>/dev/null)" == MINGW* ]]; then
+        _AC_PLATFORM="gitbash"
+    elif [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+        _AC_PLATFORM="macos"
+    else
+        _AC_PLATFORM="linux"
+    fi
+    printf '%s' "$_AC_PLATFORM"
+}
+
 _ac_kiro_cli_data_dir() {
     # Resolve the kiro-cli data directory for the current platform.
     # Returns the path to stdout. Returns 1 if no valid path found.
@@ -2610,7 +2789,7 @@ _ac_check_cli_update_via_index() {
     # Extract the first version from the index (latest release).
     # The JSON format is: "versions": [{"version": "X.Y.Z", ...}, ...]
     # Use portable grep (no -oP) for Windows Git Bash compatibility.
-    latest_ver=$(echo "$index_json" | grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
+    latest_ver=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' <<< "$index_json" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
     if [[ -z "$latest_ver" ]]; then
         return 1
     fi
@@ -2801,11 +2980,11 @@ _ac_show_cli_changelog() {
         if [[ $in_target -eq 1 && "$line" == *"\"type\""* ]]; then
             # Capture just the quoted value, so a line holding several keys
             # ("type": "added", "description": "...") still parses.
-            change_type=$(echo "$line" | sed -n 's/.*"type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            change_type=$(sed -n 's/.*"type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$line")
         fi
         # Parse changes within target block
         if [[ $in_target -eq 1 && "$line" == *"\"description\""* ]]; then
-            change_desc=$(echo "$line" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            change_desc=$(sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$line")
             found_changes=1
             local label_color="$c_dim" label=""
             case "$change_type" in
@@ -3015,7 +3194,7 @@ _ac_do_update() {
         else
             printf "  %sInvalid selection%s\n" "$c_dim" "$reset"
             printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-            read -r -n 1
+            _ac_pause
             return
         fi
 
@@ -3055,7 +3234,7 @@ _ac_do_update() {
     rm -f "$_AC_UPDATE_CACHE"
 
     printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
-    read -r -n 1
+    _ac_pause
 }
 
 # --- Launch history ---
@@ -3134,7 +3313,7 @@ _ac_sort_projects_by_recent() {
         [[ -n "$line" ]] && sorted+=("${line#*$'\t'}")
     done < <(
         for dir in "${_AC_PROJECT_DIRS[@]}"; do
-            base="$(basename "$dir")"
+            base="${dir##*/}"
             ts="$(_ac_recent_field "$base" ts)"
             printf '%020d\t%s\n' "$ts" "$dir"
         done | sort -t$'\t' -k1,1nr -k2,2
@@ -3175,6 +3354,17 @@ _ac_git_summary() {
     fi
     printf '%s' "$out"
     return 0
+}
+
+# True when "$1" < "$2" under whatever collation is in effect in the calling
+# environment. Exists so callers can force byte-wise (C-locale) string
+# comparison for data that must sort the same regardless of the user's
+# locale (e.g. ISO8601 timestamps) by prefixing the call with LC_ALL=C --
+# `LC_ALL=C [[ "$a" < "$b" ]]` is not valid bash ([[ is a keyword, not a
+# simple command, so a leading var=value assignment doesn't apply to it),
+# but `LC_ALL=C _ac_str_lt "$a" "$b"` is.
+_ac_str_lt() {
+    [[ "$1" < "$2" ]]
 }
 
 # Convert an ISO8601 timestamp (e.g. 2026-09-04T13:19:09.305Z) to epoch seconds.
@@ -3243,10 +3433,14 @@ _ac_session_summary() {
         # Best-effort fallback: no jq. Titles are free-form and may contain
         # commas/quotes, so this is inherently fragile — on any ambiguity we
         # return empty and let the caller show a title-less marker if it wants.
-        # ISO8601 sorts chronologically as text, so the max updatedAt is newest.
+        # ISO8601 sorts chronologically as text, so the max updatedAt is newest
+        # -- but only under byte-wise (C-locale) collation. bash's [[ > ]]
+        # uses the current locale's collation, which in some locales can
+        # reorder or ignore punctuation/case, silently picking the wrong
+        # "newest" session. Force C collation for this comparison specifically.
         local newest="" ts
         while IFS= read -r ts; do
-            [[ "$ts" > "$newest" ]] && newest="$ts"
+            LC_ALL=C _ac_str_lt "$newest" "$ts" && newest="$ts"
         done < <(printf '%s' "$json" | grep -oE '"updatedAt":"[^"]*"' | sed 's/"updatedAt":"//; s/"$//')
         [[ -z "$newest" ]] && return 0
         iso="$newest"
@@ -3284,7 +3478,7 @@ declare -gA _AC_SESSION_CACHE 2>/dev/null || declare -A _AC_SESSION_CACHE
 _ac_session_cached() {
     local dir="${1:-}" safe
     [[ -n "$dir" ]] || return 0
-    safe="$(_ac_safe_name "$(basename "$dir")")"
+    safe="$(_ac_safe_name "${dir##*/}")"
     if [[ -z "${_AC_SESSION_CACHE[$safe]+set}" ]]; then
         local summary
         summary="$(_ac_session_summary "$dir")"
@@ -3467,18 +3661,18 @@ _ac_lookup_alias() {
 # for a project nested under a grouping folder, where the group is included so
 # that work/api and personal/api stay distinguishable.
 _ac_project_label() {
-    local dir="${1:-}" base parent alias_val
-    base="$(basename "$dir")"
+    local dir="${1%/}" base parent alias_val
+    base="${dir##*/}"
     alias_val="$(_ac_lookup_alias "$base")"
     if [[ -n "$alias_val" ]]; then
         printf '%s' "$alias_val"
         return 0
     fi
-    parent="$(dirname "$dir")"
+    parent="${dir%/*}"
     if _ac_is_project_root "$parent"; then
         printf '%s' "$base"
     else
-        printf '%s/%s' "$(basename "$parent")" "$base"
+        printf '%s/%s' "${parent##*/}" "$base"
     fi
     return 0
 }
@@ -3513,7 +3707,7 @@ _ac_resolve_project() {
 
     local label l_lower
     for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
-        base="$(basename "$dir")"
+        base="${dir##*/}"
         disp="$(_ac_display_name "$base")"
         label="$(_ac_project_label "$dir")"
         b_lower="$(_ac_lower "$base")"
@@ -3551,7 +3745,7 @@ _ac_project_exists_exact() {
     local query="${1:-}" dir base
     _ac_collect_projects
     for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
-        base="$(basename "$dir")"
+        base="${dir##*/}"
         if [[ "$base" == "$query" || "$(_ac_display_name "$base")" == "$query" ]]; then
             return 0
         fi
@@ -3668,13 +3862,7 @@ _ac_first_run_wizard() {
         if [[ -z "$typed" && -n "$_default_root" ]]; then
             typed="$_default_root"
         fi
-        case "$typed" in "~"*) typed="${HOME}${typed#"~"}" ;; esac
-        # Git Bash (Windows): a user may paste a native Windows path like
-        # C:\Users\me\code. bash cannot cd into a backslash path, so convert it
-        # to the Unix form (/c/Users/me/code) with cygpath when available.
-        if [[ "$typed" == *\\* || "$typed" =~ ^[A-Za-z]:[/\\] ]] && command -v cygpath >/dev/null 2>&1; then
-            typed="$(cygpath -u "$typed" 2>/dev/null || printf '%s' "$typed")"
-        fi
+        typed="$(_ac_normalize_typed_path "$typed")"
         [[ -z "$typed" ]] && { printf "\n  %sNo directory given — setup cancelled.%s\n" "$c_dim" "$reset"; return 1; }
         chosen_root="$typed"
     fi
@@ -3778,11 +3966,7 @@ _ac_setup() {
     local new_root
     read -r new_root || return 1
     if [[ -n "$new_root" ]]; then
-        case "$new_root" in "~"*) new_root="${HOME}${new_root#"~"}" ;; esac
-        # Git Bash: convert a native Windows path (C:\...) to Unix form.
-        if [[ "$new_root" == *\\* || "$new_root" =~ ^[A-Za-z]:[/\\] ]] && command -v cygpath >/dev/null 2>&1; then
-            new_root="$(cygpath -u "$new_root" 2>/dev/null || printf '%s' "$new_root")"
-        fi
+        new_root="$(_ac_normalize_typed_path "$new_root")"
         if [[ ! -d "$new_root" ]]; then
             printf "  %s%s does not exist. Create it? (Y/n): %s" "$c_dim" "$new_root" "$reset"
             local mk
@@ -3902,12 +4086,13 @@ _ac_doctor() {
     printf '\n%s── AI CLI ──%s\n' "$dim" "$rst"
     printf '  %sconfigured CLI: %s %s%s\n' "$dim" "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH" "$rst"
     if command -v "$_AC_CLI_TOOL" >/dev/null 2>&1; then
-        # Report the resolved executable path (type -P), which is what the
-        # new-tab launch execs. If a shell alias shadows the tool name, note it:
-        # the new tab runs the real binary, not the alias, so this explains any
-        # divergence between current-tab (alias applies) and new-tab behavior.
+        # Report the resolved executable path (_ac_resolve_bin), which is what
+        # the new-tab launch execs. If a shell alias shadows the tool name,
+        # note it: the new tab runs the real binary, not the alias, so this
+        # explains any divergence between current-tab (alias applies) and
+        # new-tab behavior.
         local _cli_path
-        _cli_path="$(type -P "$_AC_CLI_TOOL" 2>/dev/null)"
+        _cli_path="$(_ac_resolve_bin "$_AC_CLI_TOOL")"
         if [[ -n "$_cli_path" ]]; then
             _ac_doctor_pass "$_AC_CLI_TOOL on PATH → $_cli_path"
         else
@@ -3971,7 +4156,7 @@ _ac_list_projects() {
     _ac_collect_projects
     local dir base disp
     for dir in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
-        base="$(basename "$dir")"
+        base="${dir##*/}"
         disp="$(_ac_project_label "$dir")"
         if [[ "$disp" == "$base" ]]; then
             printf '%s\n' "$base"
@@ -4011,6 +4196,172 @@ _ac_launch_by_name() {
 
     _ac_launch_project "$_AC_RESOLVED_DIR" "$resume"
     return $?
+}
+
+# Render the full interactive menu (header, project list, footer) to stdout.
+# Extracted out of ac()'s ~150-line inline render block so the two concerns
+# -- "what does the menu look like" and "how do we dispatch a keypress" --
+# aren't interleaved in one function.
+#
+# This is NOT a standalone, independently-callable renderer: like several
+# other helpers in this file (e.g. _ac_doctor_pass inside _ac_doctor), it
+# relies on bash's dynamic scoping of `local` variables to read the caller's
+# in-progress state directly rather than taking it as parameters --
+# specifically `dirs` (the filtered project list), `_ac_filter`, and
+# `_ac_label_cache` (all declared `local` in ac()'s while loop before this is
+# called). It must only ever be called from inside that loop.
+#
+# Writes to the caller's `index` (declared `local` in ac() before the call,
+# left undeclared here so bash's dynamic scoping resolves it to that
+# variable rather than shadowing it) -- one past the last valid selection
+# number, needed by ac()'s bounds checks after the prompt returns.
+_ac_render_menu() {
+    # Colors
+    local reset=$'\e[0m'
+    local c_title=$'\e[1;36m'
+    local c_dim=$'\e[2m'
+    local c_num=$'\e[1;33m'
+    local c_name=$'\e[0;37m'
+    local c_prompt=$'\e[1;32m'
+    local c_accent=$'\e[0;36m'
+    local c_update=$'\e[1;33m'
+
+    _ac_clear
+
+    # Display menu
+    printf "\n"
+    printf "  %s╭─────────────────────────────────────╮%s\n" "$c_title" "$reset"
+    local _ac_hdr="anycli"
+    local _ac_ver="v$_AC_VERSION"
+    local _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
+    printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
+    # Show CLI tool version on second line
+    if [[ -z "${_AC_CLI_VERSION_CACHED:-}" ]]; then
+        _AC_CLI_VERSION_CACHED="$($_AC_CLI_TOOL --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")"
+    fi
+    if [[ -n "$_AC_CLI_VERSION_CACHED" ]]; then
+        local _cli_label="$_AC_CLI_TOOL $_AC_CLI_VERSION_CACHED"
+        local _cli_pad=$(( 37 - 2 - ${#_cli_label} - 2 ))
+        printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
+            "$c_title" "$reset" "$c_dim" "$_cli_label" "$_cli_pad" "" "$reset" "$c_title" "$reset"
+    fi
+    if _ac_update_available; then
+        local _ac_update_msg=""
+        if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+            if [[ -n "$_AC_CLI_LATEST_VERSION" ]]; then
+                _ac_update_msg="$_AC_CLI_TOOL ${_AC_CLI_LATEST_VERSION}"
+            else
+                _ac_update_msg="$_AC_CLI_TOOL"
+            fi
+        fi
+        if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+            if [[ -n "$_ac_update_msg" ]]; then
+                _ac_update_msg="${_ac_update_msg} + launcher"
+            else
+                _ac_update_msg="launcher"
+            fi
+        fi
+        if [[ "${_AC_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]; then
+            local _app_count
+            _app_count=$(wc -w <<< "$_AC_APPS_UPDATE_LIST")
+            if [[ -n "$_ac_update_msg" ]]; then
+                _ac_update_msg="${_ac_update_msg} + ${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
+            else
+                _ac_update_msg="${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
+            fi
+        fi
+        local _update_label="⬆ ${_ac_update_msg} available"
+        local _upd_pad=$(( 37 - 2 - ${#_update_label} - 2 ))
+        printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
+            "$c_title" "$reset" "$c_update" "$_update_label" "$_upd_pad" "" "$reset" "$c_title" "$reset"
+    fi
+    printf "  %s╰─────────────────────────────────────╯%s\n" "$c_title" "$reset"
+
+    printf "\n"
+
+    index=1
+
+    # Entry 1: terminal (cd only)
+    printf "   %s%2d%s  %s● %s%s\n" "$c_num" "$index" "$reset" "$c_accent" "terminal" "$reset"
+    ((index++))
+
+    # Entry 2: root (cd + kiro)
+    local _root_base="${_AC_PROJECTS_DIR%/}"
+    printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "${_root_base##*/}" "$reset"
+    ((index++))
+
+    if [[ -n "$_ac_filter" ]]; then
+        printf "   %s%s%s  %sfilter: %s%s  %s(/ to clear)%s\n" \
+            "$c_dim" "──" "$reset" "$c_accent" "$_ac_filter" "$reset" "$c_dim" "$reset"
+        if (( ${#dirs[@]} == 0 )); then
+            printf "   %sno projects match%s\n" "$c_dim" "$reset"
+        fi
+    fi
+
+    # Entry 3+: projects
+    local dir
+    for dir in "${dirs[@]+"${dirs[@]}"}"; do
+        local _dirname="${dir##*/}"
+        local _safe_dirname
+        _safe_dirname="$(_ac_safe_name "$_dirname")"
+        local _display_name="${_ac_label_cache[$dir]-}"
+        [[ -n "${_ac_label_cache[$dir]+set}" ]] || _display_name="$(_ac_project_label "$dir")"
+        local _git_info=""
+        if [[ "${_AC_SHOW_GIT_STATUS:-false}" == "true" ]]; then
+            _git_info="$(_ac_git_summary "$dir")"
+        fi
+        local _app_ver="" _app_has_update=""
+        # Check if this project is a tracked app and get its version
+        local _app_name _app_path
+        for _app_name in "${_AC_TRACKED_APP_NAMES[@]+"${_AC_TRACKED_APP_NAMES[@]}"}"; do
+            _app_path="$(_ac_app_field "$_app_name" path)"
+            if [[ -n "$_app_path" && ( "$_app_path" == "$dir" || "$_app_path" == "${dir%/}" ) ]]; then
+                _app_ver=$(_ac_app_version "$_app_name")
+                # Check if this app has an update available
+                if [[ " ${_AC_APPS_UPDATE_LIST:-} " == *" $_app_name "* ]]; then
+                    _app_has_update=1
+                fi
+                break
+            fi
+        done
+        local _git_suffix=""
+        [[ -n "$_git_info" ]] && _git_suffix="$(printf "  %s%s%s" "$c_dim" "$_git_info" "$reset")"
+        # Session suffix: last-session marker + title + age, opt-in and cached.
+        local _session_suffix=""
+        if [[ "${_AC_SHOW_SESSIONS:-false}" == "true" ]]; then
+            local _sess_info
+            _sess_info="$(_ac_session_suffix "$dir")"
+            [[ -n "$_sess_info" ]] && _session_suffix="$(printf "  %s%s%s" "$c_dim" "$_sess_info" "$reset")"
+        fi
+        if [[ -n "$_app_ver" && -n "$_app_has_update" ]]; then
+            printf "   %s%2d%s  %s%s%s  %sv%s%s  %s⬆%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$c_dim" "$_app_ver" "$reset" "$c_update" "$reset" "$_git_suffix" "$_session_suffix"
+        elif [[ -n "$_app_ver" ]]; then
+            printf "   %s%2d%s  %s%s%s  %sv%s%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$c_dim" "$_app_ver" "$reset" "$_git_suffix" "$_session_suffix"
+        else
+            printf "   %s%2d%s  %s%s%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$_git_suffix" "$_session_suffix"
+        fi
+        ((index++))
+    done
+
+    # Footer options
+    printf "\n"
+    # A "?" help key is offered only when the configured CLI supports the
+    # session triggers, so the help screen always has something to show.
+    local _help_key=""
+    if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" || -n "$(_ac_cli_picker_flag "$_AC_CLI_TOOL")" ]]; then
+        _help_key="$(printf "   %s ?%s  help" "$c_num" "$reset")"
+    fi
+    if _ac_update_available; then
+        printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s q%s  quit%s\n" \
+            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
+    else
+        printf "   %s c%s  config    %s v%s  changelog   %s q%s  quit%s    %s(type to filter)%s\n" \
+            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key" "$c_dim" "$reset"
+    fi
+    # Session triggers (r<N> resume, p<N> pick) are documented behind the
+    # "?" help key rather than shown inline, to keep the menu uncluttered.
+
+    printf "\n  %s›%s " "$c_prompt" "$reset"
 }
 
 ac() {
@@ -4126,9 +4477,23 @@ ac() {
     local _ac_checked_updates=0
     # Active name filter, so long project lists stay navigable
     local _ac_filter=""
+    local _ac_cfg_mtime="" _ac_cfg_loaded=0 _ac_cfg_mtime_now
 
     while true; do
-        _ac_load_config
+        # Skip the reload (full YAML re-parse + legacy migration scan) when
+        # the config file hasn't changed since last read. Without this, every
+        # keystroke that returns to this loop -- most commonly typing a
+        # filter character -- re-parsed the entire config from scratch even
+        # though nothing on disk changed. A submenu that does change the
+        # config (e.g. the config menu) always writes the file, which bumps
+        # its mtime and triggers a reload here on return, so in-memory state
+        # never goes stale.
+        _ac_cfg_mtime_now="$(_ac_file_mtime "$_AC_CONFIG_FILE")"
+        if (( ! _ac_cfg_loaded )) || [[ "$_ac_cfg_mtime_now" != "$_ac_cfg_mtime" ]]; then
+            _ac_load_config
+            _ac_cfg_mtime="$_ac_cfg_mtime_now"
+            _ac_cfg_loaded=1
+        fi
 
         if [[ ! -d "$_AC_PROJECTS_DIR" ]]; then
             echo "Error: Projects directory not found: $_AC_PROJECTS_DIR"
@@ -4146,164 +4511,33 @@ ac() {
         _ac_collect_projects
         local -a all_dirs=("${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}")
         local -a dirs=()
+        # Populated while filtering below, so the render loop further down
+        # doesn't call _ac_project_label a second time per project (it's not
+        # free -- it can call _ac_lookup_alias, which itself scans every
+        # configured alias on a miss). Left empty when there's no filter, in
+        # which case the render loop's fallback computes it directly, same
+        # as before -- one call either way, never two.
+        local -A _ac_label_cache=()
         if [[ -z "$_ac_filter" ]]; then
             dirs=("${all_dirs[@]+"${all_dirs[@]}"}")
         else
             local _f_lower="$(_ac_lower "$_ac_filter")" _f_dir _f_base _f_disp
             for _f_dir in "${all_dirs[@]+"${all_dirs[@]}"}"; do
-                _f_base="$(basename "$_f_dir")"
+                _f_base="${_f_dir##*/}"
                 _f_disp="$(_ac_project_label "$_f_dir")"
+                _ac_label_cache["$_f_dir"]="$_f_disp"
                 if [[ "$(_ac_lower "$_f_base")" == *"$_f_lower"* || "$(_ac_lower "$_f_disp")" == *"$_f_lower"* ]]; then
                     dirs+=("$_f_dir")
                 fi
             done
         fi
 
-        # Colors
-        local reset=$'\e[0m'
-        local c_title=$'\e[1;36m'
-        local c_dim=$'\e[2m'
-        local c_num=$'\e[1;33m'
-        local c_name=$'\e[0;37m'
-        local c_prompt=$'\e[1;32m'
-        local c_accent=$'\e[0;36m'
-        local c_update=$'\e[1;33m'
-
-        _ac_clear
-
-        # Display menu
-        printf "\n"
-        printf "  %s╭─────────────────────────────────────╮%s\n" "$c_title" "$reset"
-        local _ac_hdr="anycli"
-        local _ac_ver="v$_AC_VERSION"
-        local _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
-        printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
-        # Show CLI tool version on second line
-        if [[ -z "${_AC_CLI_VERSION_CACHED:-}" ]]; then
-            _AC_CLI_VERSION_CACHED="$($_AC_CLI_TOOL --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")"
-        fi
-        if [[ -n "$_AC_CLI_VERSION_CACHED" ]]; then
-            local _cli_label="$_AC_CLI_TOOL $_AC_CLI_VERSION_CACHED"
-            local _cli_pad=$(( 37 - 2 - ${#_cli_label} - 2 ))
-            printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
-                "$c_title" "$reset" "$c_dim" "$_cli_label" "$_cli_pad" "" "$reset" "$c_title" "$reset"
-        fi
-        if _ac_update_available; then
-            local _ac_update_msg=""
-            if [[ "${_AC_CLI_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                if [[ -n "$_AC_CLI_LATEST_VERSION" ]]; then
-                    _ac_update_msg="$_AC_CLI_TOOL ${_AC_CLI_LATEST_VERSION}"
-                else
-                    _ac_update_msg="$_AC_CLI_TOOL"
-                fi
-            fi
-            if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                if [[ -n "$_ac_update_msg" ]]; then
-                    _ac_update_msg="${_ac_update_msg} + launcher"
-                else
-                    _ac_update_msg="launcher"
-                fi
-            fi
-            if [[ "${_AC_APPS_UPDATE_AVAILABLE:-0}" == "1" ]]; then
-                local _app_count
-                _app_count=$(echo "$_AC_APPS_UPDATE_LIST" | wc -w)
-                if [[ -n "$_ac_update_msg" ]]; then
-                    _ac_update_msg="${_ac_update_msg} + ${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
-                else
-                    _ac_update_msg="${_app_count} app$( (( _app_count > 1 )) && echo "s" || echo "")"
-                fi
-            fi
-            local _update_label="⬆ ${_ac_update_msg} available"
-            local _upd_pad=$(( 37 - 2 - ${#_update_label} - 2 ))
-            printf "  %s│%s  %s%s%*s%s  %s│%s\n" \
-                "$c_title" "$reset" "$c_update" "$_update_label" "$_upd_pad" "" "$reset" "$c_title" "$reset"
-        fi
-        printf "  %s╰─────────────────────────────────────╯%s\n" "$c_title" "$reset"
-
-        printf "\n"
-
-        local index=1
-
-        # Entry 1: terminal (cd only)
-        printf "   %s%2d%s  %s● %s%s\n" "$c_num" "$index" "$reset" "$c_accent" "terminal" "$reset"
-        ((index++))
-
-        # Entry 2: root (cd + kiro)
-        printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "$(basename "$_AC_PROJECTS_DIR")" "$reset"
-        ((index++))
-
-        if [[ -n "$_ac_filter" ]]; then
-            printf "   %s%s%s  %sfilter: %s%s  %s(/ to clear)%s\n" \
-                "$c_dim" "──" "$reset" "$c_accent" "$_ac_filter" "$reset" "$c_dim" "$reset"
-            if (( ${#dirs[@]} == 0 )); then
-                printf "   %sno projects match%s\n" "$c_dim" "$reset"
-            fi
-        fi
-
-        # Entry 3+: projects
-        for dir in "${dirs[@]+"${dirs[@]}"}"; do
-            local _dirname
-            _dirname="$(basename "$dir")"
-            local _safe_dirname
-            _safe_dirname="$(_ac_safe_name "$_dirname")"
-            local _display_name
-            _display_name="$(_ac_project_label "$dir")"
-            local _git_info=""
-            if [[ "${_AC_SHOW_GIT_STATUS:-false}" == "true" ]]; then
-                _git_info="$(_ac_git_summary "$dir")"
-            fi
-            local _app_ver="" _app_has_update=""
-            # Check if this project is a tracked app and get its version
-            local _app_name _app_path
-            for _app_name in "${_AC_TRACKED_APP_NAMES[@]+"${_AC_TRACKED_APP_NAMES[@]}"}"; do
-                _app_path="$(_ac_app_field "$_app_name" path)"
-                if [[ -n "$_app_path" && ( "$_app_path" == "$dir" || "$_app_path" == "${dir%/}" ) ]]; then
-                    _app_ver=$(_ac_app_version "$_app_name")
-                    # Check if this app has an update available
-                    if [[ " ${_AC_APPS_UPDATE_LIST:-} " == *" $_app_name "* ]]; then
-                        _app_has_update=1
-                    fi
-                    break
-                fi
-            done
-            local _git_suffix=""
-            [[ -n "$_git_info" ]] && _git_suffix="$(printf "  %s%s%s" "$c_dim" "$_git_info" "$reset")"
-            # Session suffix: last-session marker + title + age, opt-in and cached.
-            local _session_suffix=""
-            if [[ "${_AC_SHOW_SESSIONS:-false}" == "true" ]]; then
-                local _sess_info
-                _sess_info="$(_ac_session_suffix "$dir")"
-                [[ -n "$_sess_info" ]] && _session_suffix="$(printf "  %s%s%s" "$c_dim" "$_sess_info" "$reset")"
-            fi
-            if [[ -n "$_app_ver" && -n "$_app_has_update" ]]; then
-                printf "   %s%2d%s  %s%s%s  %sv%s%s  %s⬆%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$c_dim" "$_app_ver" "$reset" "$c_update" "$reset" "$_git_suffix" "$_session_suffix"
-            elif [[ -n "$_app_ver" ]]; then
-                printf "   %s%2d%s  %s%s%s  %sv%s%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$c_dim" "$_app_ver" "$reset" "$_git_suffix" "$_session_suffix"
-            else
-                printf "   %s%2d%s  %s%s%s%s%s\n" "$c_num" "$index" "$reset" "$c_name" "$_display_name" "$reset" "$_git_suffix" "$_session_suffix"
-            fi
-            ((index++))
-        done
-
-        # Footer options
-        printf "\n"
-        # A "?" help key is offered only when the configured CLI supports the
-        # session triggers, so the help screen always has something to show.
-        local _help_key=""
-        if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" || -n "$(_ac_cli_picker_flag "$_AC_CLI_TOOL")" ]]; then
-            _help_key="$(printf "   %s ?%s  help" "$c_num" "$reset")"
-        fi
-        if _ac_update_available; then
-            printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s q%s  quit%s\n" \
-                "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
-        else
-            printf "   %s c%s  config    %s v%s  changelog   %s q%s  quit%s    %s(type to filter)%s\n" \
-                "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key" "$c_dim" "$reset"
-        fi
-        # Session triggers (r<N> resume, p<N> pick) are documented behind the
-        # "?" help key rather than shown inline, to keep the menu uncluttered.
-
-        printf "\n  %s›%s " "$c_prompt" "$reset"
+        local index
+        # Declared here (not just inside _ac_render_menu) because the
+        # timeout message below still needs them after the render call
+        # returns and its own copies of these have gone out of scope.
+        local reset=$'\e[0m' c_dim=$'\e[2m'
+        _ac_render_menu
 
         # Read input, with an idle timeout
         local key read_rc=0
@@ -4409,7 +4643,8 @@ ac() {
         elif ((key == 2 )); then
             cd "$_AC_PROJECTS_DIR" || return 1
             local flags
-            flags=$(_ac_get_flags "$(basename "$_AC_PROJECTS_DIR")")
+            local _root_base="${_AC_PROJECTS_DIR%/}"
+            flags=$(_ac_get_flags "${_root_base##*/}")
             _ac_run_cli "$flags"
             return
         else

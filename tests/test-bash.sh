@@ -591,6 +591,43 @@ else
     printf '  \e[31m✗\e[0m tildify: result contains a stray backslash\n'; ((FAIL++))
 fi
 
+# ═══════════════════════════════════════
+echo "── Regression: _ac_normalize_typed_path (shared by wizard/setup/config-menu) ──"
+
+# Plain Unix path: passed through unchanged.
+assert_eq "normalize-path: plain unix path unchanged" "/tmp/plain" "$(_ac_normalize_typed_path "/tmp/plain")"
+
+# Leading ~: expanded to $HOME.
+assert_eq "normalize-path: ~ expands to \$HOME" "$HOME/foo" "$(_ac_normalize_typed_path "~/foo")"
+
+# Git Bash: a pasted native Windows path is converted via cygpath -u. Before
+# this was extracted into a shared helper, _ac_config_edit_projects_dir (the
+# config-menu path editor, unlike the wizard and `ac setup`) had no cygpath
+# conversion at all -- a Windows user pasting a path there got a broken
+# projects_dir. Confirm the shared helper covers all three callers.
+cat > "$MOCK_BIN/cygpath" << 'MOCK'
+#!/usr/bin/env bash
+# Simulate cygpath -u: convert C:\Users\me\code to /c/Users/me/code
+if [[ "$1" == "-u" ]]; then
+    p="${2//\\//}"
+    p="$(echo "$p" | sed -E 's#^([A-Za-z]):#/\L\1#')"
+    echo "$p"
+fi
+MOCK
+chmod +x "$MOCK_BIN/cygpath"
+assert_eq "normalize-path: Git Bash native path converted via cygpath" \
+    "/c/Users/me/code" "$(_ac_normalize_typed_path 'C:\Users\me\code')"
+rm -f "$MOCK_BIN/cygpath"
+
+# Without cygpath on PATH at all (non-Windows), a backslash-containing input
+# is returned as-is rather than erroring -- cygpath is optional everywhere
+# this is called.
+OLD_PATH_NORM="$PATH"
+PATH="$MOCK_BIN"
+assert_eq "normalize-path: no cygpath available -> input passed through" \
+    'C:\Users\me\code' "$(_ac_normalize_typed_path 'C:\Users\me\code')"
+PATH="$OLD_PATH_NORM"
+
 # Test: round-trip (write then read back)
 _AC_PROJECTS_DIR=""
 _AC_CLI_FLAGS=""
@@ -659,6 +696,28 @@ else
 fi
 
 rm -rf "$MIGRATION_DIR"
+
+# Regression: a failed/empty config write must not silently discard the
+# legacy file. Simulate a broken _ac_write_config (as if a disk-full or
+# permission-denied condition truncated the write) and confirm the legacy
+# file survives, so the migration can be retried on the next run. The
+# redefinition is scoped to a subshell so it never leaks into later tests
+# that call the real _ac_write_config.
+FAILWRITE_DIR=$(mktemp -d)
+cat > "$FAILWRITE_DIR/config" << 'EOF'
+PROJECTS_DIR=~/legacy-projects
+EOF
+(
+    _AC_CONFIG_FILE="$FAILWRITE_DIR/config.yaml"
+    _ac_write_config() { : > "$_AC_CONFIG_FILE"; }
+    _ac_migrate_legacy "$FAILWRITE_DIR/config"
+)
+if [[ -f "$FAILWRITE_DIR/config" && ! -f "$FAILWRITE_DIR/config.bak" ]]; then
+    printf '  \e[32m✓\e[0m migration: legacy file preserved when the new config write failed/was empty\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m migration: legacy file should survive a failed config write\n'; ((FAIL++))
+fi
+rm -rf "$FAILWRITE_DIR"
 
 # ═══════════════════════════════════════
 echo "── Version & Changelog ──"
@@ -785,6 +844,16 @@ else
     printf '  \e[31m✗\e[0m flags: --version should be filtered\n'; ((FAIL++))
 fi
 
+# Regression: the cache file is written atomically (temp file + mv), matching
+# the update-check cache, so a reader can never observe a half-written file.
+# Confirm the cache is populated with the right content and no stray
+# .XXXXXX temp file is left behind after a normal run.
+cache_file="${TMPDIR:-/tmp}/ac-flags-test-cli.cache"
+assert_contains "flags: cache file populated after parse" "--agent=<AGENT>" "$(cat "$cache_file" 2>/dev/null)"
+stray_tmp="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'ac-flags-test-cli.cache.??????' 2>/dev/null)"
+assert_eq "flags: no stray temp cache file left behind" "" "$stray_tmp"
+rm -f "$cache_file"
+
 # ═══════════════════════════════════════
 echo "── Regression: config menu must not hang on a slow/hanging --help ──"
 
@@ -879,8 +948,8 @@ cat > "$MOCK_BIN/noresume-cli" << 'MOCK'
 echo "NORESUME_CALLED: $*" >> "${LK_TEST_LOG:-/tmp/ac-test.log}"
 MOCK
 chmod +x "$MOCK_BIN/noresume-cli"
-# Add a flagless entry to the caps map for the duration of this test.
-_AC_CLI_CAPS+=("noresume-cli||")
+# Add a flagless entry to the CLI table for the duration of this test.
+_AC_CLIS+=("noresume-cli||||")
 _AC_CLI_TOOL="noresume-cli"
 _AC_CLI_LAUNCH=""
 rm -f "$LK_TEST_LOG"
@@ -1754,6 +1823,186 @@ rm -rf "$WT_NONE_DIR"
 unset _AC_WT_BIN
 
 # ═══════════════════════════════════════
+echo "── _ac_pause: press-any-key read ──"
+# Under bash, _ac_pause is a thin wrapper over `read -r -n 1`. The zsh branch
+# (read -k 1 when a real tty is attached, a plain line read otherwise -- `-k`
+# errors outright over a non-tty pipe) can only be exercised under a real
+# zsh, covered by the CI zsh job.
+pause_out=$(printf 'Zrest' | { _ac_pause; printf '%s' "$_ac_pause_key"; })
+assert_eq "pause: consumes exactly one character" "Z" "$pause_out"
+pause_rest=$(printf 'Zrest' | { _ac_pause; IFS= read -r r; printf '%s' "$r"; })
+assert_eq "pause: leaves the remaining input for the next read" "rest" "$pause_rest"
+
+# ═══════════════════════════════════════
+echo "── _ac_platform: single detection seam ──"
+
+# _AC_PLATFORM_OVERRIDE must win outright, every call, regardless of what real
+# detection would otherwise find or what got cached into _AC_PLATFORM by an
+# earlier unrelated call in this same test run.
+_AC_PLATFORM="macos"   # simulate a stale cache from some earlier real detection
+_AC_PLATFORM_OVERRIDE="wsl"
+assert_eq "platform: override wins over a stale cache" "wsl" "$(_ac_platform)"
+_AC_PLATFORM_OVERRIDE="gitbash"
+assert_eq "platform: override can flip between calls" "gitbash" "$(_ac_platform)"
+unset _AC_PLATFORM _AC_PLATFORM_OVERRIDE
+
+# Real detection: caching. A pre-populated _AC_PLATFORM must be returned as-is
+# with no re-detection -- checked with a sentinel value that real detection
+# would never produce, so this can't pass by accident regardless of what OS
+# this suite happens to be running on (including WSL2, where /proc/version
+# would otherwise take precedence over any MSYSTEM/uname signal).
+_AC_PLATFORM="__cached_sentinel__"
+assert_eq "platform: a populated cache is returned without re-detecting" "__cached_sentinel__" "$(_ac_platform)"
+unset _AC_PLATFORM
+
+# Real detection: MSYSTEM is consulted and the result is cached. Skipped when
+# /proc/version already claims WSL (as it does inside this session's own WSL2
+# sandbox), since /proc/version legitimately takes precedence there and this
+# assertion is about the MSYSTEM branch specifically.
+if ! { [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; }; then
+    unset _AC_PLATFORM
+    export MSYSTEM="MINGW64"
+    first="$(_ac_platform)"
+    unset MSYSTEM
+    second="$(_ac_platform)"
+    assert_eq "platform: real detection under MSYSTEM=MINGW64" "gitbash" "$first"
+    assert_eq "platform: cached value survives the signal disappearing" "$first" "$second"
+    unset _AC_PLATFORM
+fi
+
+# ═══════════════════════════════════════
+echo "── check-platform.sh: shares _ac_platform() instead of its own copy ──"
+
+# check-platform.sh sources anycli.bash and delegates its detect_platform()
+# to _ac_platform(), rather than maintaining a second, independently-
+# drifting copy of the same /proc/version + $MSYSTEM + `uname -s` signals.
+# Confirm the override seam is honored end-to-end through the real script
+# (not just the in-process function), for each of the four platforms.
+for _cp_plat in wsl gitbash macos linux; do
+    _cp_out="$(_AC_PLATFORM_OVERRIDE="$_cp_plat" bash "$PROJECT_DIR/tests/check-platform.sh" 2>/dev/null | sed -n '2p')"
+    case "$_cp_plat" in
+        wsl)     _cp_expected="Platform: WSL2" ;;
+        gitbash) _cp_expected="Platform: Git Bash (Windows)" ;;
+        macos)   _cp_expected="Platform: macOS" ;;
+        linux)   _cp_expected="Platform: Linux" ;;
+    esac
+    assert_eq "check-platform: reports $_cp_plat via the override seam" "$_cp_expected" "$_cp_out"
+done
+
+# Fallback: if anycli.bash isn't reachable next to it (e.g. the script was
+# copied out on its own), check-platform.sh must still run standalone rather
+# than erroring out.
+CP_STANDALONE_DIR="$(mktemp -d)"
+mkdir -p "$CP_STANDALONE_DIR/tests"
+cp "$PROJECT_DIR/tests/check-platform.sh" "$CP_STANDALONE_DIR/tests/"
+cp_standalone_out="$(bash "$CP_STANDALONE_DIR/tests/check-platform.sh" 2>&1 | sed -n '2p')"
+assert_contains "check-platform: standalone fallback still reports a platform" "Platform:" "$cp_standalone_out"
+rm -rf "$CP_STANDALONE_DIR"
+
+# ═══════════════════════════════════════
+echo "── _ac_build_wt_invocation: pure per-platform argv (no wt.exe mock needed) ──"
+
+# wsl: must invoke wsl.exe --cd with the Linux path -- and must NOT pass a UNC
+# --startingDirectory (regression: WSL cannot set its working directory to a
+# \\wsl.localhost\... path, so wsl.exe used to fail with ERROR_PATH_NOT_FOUND).
+_AC_PLATFORM_OVERRIDE="wsl"
+WSL_DISTRO_NAME="Ubuntu-Test"
+_ac_build_wt_invocation "/home/me/proj" "/tmp/ac-tab-x.sh" "My Title" "#112233"
+wt_argv="${_AC_WT_ARGS[*]}"
+assert_contains "wt-invocation(wsl): title" "--title My Title" "$wt_argv"
+assert_contains "wt-invocation(wsl): color" "--tabColor #112233" "$wt_argv"
+assert_contains "wt-invocation(wsl): wsl.exe with distro" "wsl.exe -d Ubuntu-Test" "$wt_argv"
+assert_contains "wt-invocation(wsl): --cd with linux path" "--cd /home/me/proj" "$wt_argv"
+if [[ "$wt_argv" != *'--startingDirectory'* && "$wt_argv" != *'\\wsl'* ]]; then
+    printf '  \e[32m✓\e[0m wt-invocation(wsl): no UNC --startingDirectory\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-invocation(wsl): must not pass a UNC --startingDirectory\n    actual: %s\n' "$wt_argv"; ((FAIL++))
+fi
+unset _AC_PLATFORM_OVERRIDE WSL_DISTRO_NAME _AC_WT_ARGS
+
+# gitbash: must convert paths via cygpath and pin --startingDirectory.
+cat > "$MOCK_BIN/cygpath" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "$1" == "-w" ]]; then
+    echo "C:\\win\\${2##*/}"
+else
+    echo "$1"
+fi
+MOCK
+chmod +x "$MOCK_BIN/cygpath"
+_AC_PLATFORM_OVERRIDE="gitbash"
+_ac_build_wt_invocation "/home/me/proj" "/tmp/ac-tab-x.sh" "GB Title" "#aabbcc"
+wt_argv="${_AC_WT_ARGS[*]}"
+assert_contains "wt-invocation(gitbash): title" "--title GB Title" "$wt_argv"
+assert_contains "wt-invocation(gitbash): startingDirectory converted" "--startingDirectory C:\\win\\proj" "$wt_argv"
+assert_contains "wt-invocation(gitbash): sets _AC_SPAWNED_TAB via env" "_AC_SPAWNED_TAB=1" "$wt_argv"
+if [[ "$wt_argv" != *'wsl.exe'* ]]; then
+    printf '  \e[32m✓\e[0m wt-invocation(gitbash): does not invoke wsl.exe\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-invocation(gitbash): must not invoke wsl.exe\n'; ((FAIL++))
+fi
+rm -f "$MOCK_BIN/cygpath"
+unset _AC_PLATFORM_OVERRIDE _AC_WT_ARGS
+
+# linux/macos (the default case): plain bash -l <script>, no Windows-specific args.
+_AC_PLATFORM_OVERRIDE="linux"
+_ac_build_wt_invocation "/home/me/proj" "/tmp/ac-tab-x.sh" "" ""
+wt_argv="${_AC_WT_ARGS[*]}"
+assert_contains "wt-invocation(linux): bash -l with script" "bash -l /tmp/ac-tab-x.sh" "$wt_argv"
+if [[ "$wt_argv" != *'C:\'* && "$wt_argv" != *'wsl.exe'* && "$wt_argv" != *'--startingDirectory'* ]]; then
+    printf '  \e[32m✓\e[0m wt-invocation(linux): no Windows-specific args\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-invocation(linux): should have no Windows-specific args\n    actual: %s\n' "$wt_argv"; ((FAIL++))
+fi
+unset _AC_PLATFORM_OVERRIDE _AC_WT_ARGS
+
+# WT_PROFILE_ID, when set, is passed through regardless of platform.
+_AC_PLATFORM_OVERRIDE="linux"
+WT_PROFILE_ID="{guid-here}"
+_ac_build_wt_invocation "/home/me/proj" "/tmp/ac-tab-x.sh" "" ""
+assert_contains "wt-invocation: profile id passed through" "--profile {guid-here}" "${_AC_WT_ARGS[*]}"
+unset _AC_PLATFORM_OVERRIDE WT_PROFILE_ID _AC_WT_ARGS
+
+# ═══════════════════════════════════════
+echo "── _ac_emit_tab_script: pure script content (no temp file needed) ──"
+
+script_out="$(_ac_emit_tab_script "/tmp/ac-tab-abc123.sh" "" "/home/me/proj" /usr/bin/claude --resume)"
+assert_contains "emit-script: shebang" "#!/usr/bin/env bash" "$script_out"
+first_line="$(printf '%s\n' "$script_out" | sed -n '2p')"
+assert_eq "emit-script: self-delete is the FIRST real line (before any exec)" "rm -f -- /tmp/ac-tab-abc123.sh" "$first_line"
+assert_contains "emit-script: cd's into the project (quoted)" "cd /home/me/proj || exit 1" "$script_out"
+assert_contains "emit-script: sets _AC_SPAWNED_TAB" "export _AC_SPAWNED_TAB=1" "$script_out"
+assert_contains "emit-script: execs the resolved argv" "exec /usr/bin/claude --resume" "$script_out"
+if [[ "$script_out" != *']0;'* ]]; then
+    printf '  \e[32m✓\e[0m emit-script: no title (OSC 0) line when title is empty\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m emit-script: should have no title line when title is empty\n    actual: %s\n' "$script_out"; ((FAIL++))
+fi
+
+# With a title: an OSC 0 title-setting line must be present and name the title.
+script_out2="$(_ac_emit_tab_script "/tmp/ac-tab-abc123.sh" "My Project" "/home/me/proj" /usr/bin/claude)"
+assert_contains "emit-script: title line present when title is set" ']0;My Project' "$script_out2"
+
+# Quoting: a directory containing shell metacharacters ($(), spaces) must
+# survive as literal data when the generated script actually runs, not be
+# interpreted as shell syntax.
+EVIL_PROJ_PARENT="$(mktemp -d)"
+EVIL_PROJ_DIR="$EVIL_PROJ_PARENT/weird \$(touch /tmp/ac-emit-pwned) dir"
+mkdir -p "$EVIL_PROJ_DIR"
+QUOTE_SCRIPT="$(mktemp -u "${TMPDIR:-/tmp}/ac-tab-quoteXXXXXX.sh")"
+_ac_emit_tab_script "$QUOTE_SCRIPT" "" "$EVIL_PROJ_DIR" /bin/true > "$QUOTE_SCRIPT"
+chmod +x "$QUOTE_SCRIPT"
+rm -f /tmp/ac-emit-pwned
+bash "$QUOTE_SCRIPT" >/dev/null 2>&1 || true
+if [[ -f /tmp/ac-emit-pwned ]]; then
+    printf '  \e[31m✗\e[0m emit-script: directory with $() must not execute as code\n'; ((FAIL++))
+    rm -f /tmp/ac-emit-pwned
+else
+    printf '  \e[32m✓\e[0m emit-script: directory with $() must not execute as code\n'; ((PASS++))
+fi
+rm -rf "$EVIL_PROJ_PARENT" "$QUOTE_SCRIPT" 2>/dev/null
+
+# ═══════════════════════════════════════
 echo "── Cross-Platform: Git Bash Detection ──"
 
 # Test: MSYSTEM=MINGW64 triggers Git Bash code path
@@ -1782,13 +2031,11 @@ _AC_PROJECTS_DIR="$GITBASH_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "gb-proj")" "#aabbcc"
 _ac_assign "_AC_PROJECT_TITLE_$(_ac_safe_name "gb-proj")" "GB Test"
 rm -f "$LK_TEST_LOG"
-export MSYSTEM="MINGW64"
-_AC_IS_WSL=0
+_AC_PLATFORM_OVERRIDE="gitbash"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$GITBASH_DIR/gb-proj" >/dev/null 2>&1 || true
 cd "$PROJECT_DIR" || true   # launching cds the shell; restore it
 sleep 0.2
-unset MSYSTEM
 if [[ -f "$LK_TEST_LOG" ]]; then
     wt_call=$(cat "$LK_TEST_LOG")
     # On Git Bash, the script path should be converted via cygpath
@@ -1801,9 +2048,13 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$MOCK_BIN/cygpath" "$LK_TEST_LOG"
 rm -rf "$GITBASH_DIR"
-unset _AC_WT_BIN
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE
 
-# Test: without MSYSTEM, non-WSL uses plain bash path (Linux/macOS)
+# Test: on a plain unix host (not WSL, not Git Bash), the launcher uses the
+# plain bash path. Forced via _AC_PLATFORM_OVERRIDE -- the single test seam
+# for platform, instead of unsetting MSYSTEM and shadowing `uname` (which
+# still wasn't enough when this suite runs for real on Git Bash for Windows,
+# where `uname -s` genuinely reports MINGW*).
 unset _AC_WT_BIN
 cat > "$MOCK_BIN/wt.exe" << 'MOCK'
 #!/usr/bin/env bash
@@ -1816,17 +2067,9 @@ mkdir -p "$UNIX_DIR/unix-proj"
 _AC_PROJECTS_DIR="$UNIX_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "unix-proj")" "#ccddee"
 rm -f "$LK_TEST_LOG"
-unset MSYSTEM
-# The launcher's git-bash detection also falls back to `uname -s` (in case
-# MSYSTEM isn't set), so unsetting MSYSTEM alone doesn't simulate a plain
-# unix host when this suite happens to be running for real on Git Bash for
-# Windows, where `uname -s` genuinely reports MINGW*. Shadow it with a
-# function for the duration of this one check.
-uname() { echo "Linux"; }
-_AC_IS_WSL=0
+_AC_PLATFORM_OVERRIDE="linux"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$UNIX_DIR/unix-proj" >/dev/null 2>&1 || true
-unset -f uname
 cd "$PROJECT_DIR" || true   # launching cds the shell; restore it
 sleep 0.2
 if [[ -f "$LK_TEST_LOG" ]]; then
@@ -1845,7 +2088,7 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$UNIX_DIR"
-unset _AC_WT_BIN _AC_IS_WSL
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE
 
 # ═══════════════════════════════════════
 echo "── Regression: WSL new-tab uses --cd, not a UNC startingDirectory ──"
@@ -1866,8 +2109,7 @@ mkdir -p "$WSL_DIR/wsl-proj"
 _AC_PROJECTS_DIR="$WSL_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "wsl-proj")" "#123456"
 rm -f "$LK_TEST_LOG"
-unset MSYSTEM
-_AC_IS_WSL=1
+_AC_PLATFORM_OVERRIDE="wsl"
 WSL_DISTRO_NAME="Ubuntu"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$WSL_DIR/wsl-proj" >/dev/null 2>&1 || true
@@ -1889,13 +2131,13 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$WSL_DIR"
-unset _AC_WT_BIN _AC_IS_WSL WSL_DISTRO_NAME
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE WSL_DISTRO_NAME
 
 # ═══════════════════════════════════════
 echo "── Cross-Platform: WSL Detection ──"
 
-# Test: WSL detection sets is_wsl based on /proc/version
-# We can't mock /proc/version easily, but we can test the _AC_IS_WSL override
+# Test: WSL detection sets platform based on /proc/version
+# We can't mock /proc/version easily, but we can test the _AC_PLATFORM_OVERRIDE
 unset _AC_WT_BIN
 cat > "$MOCK_BIN/wt.exe" << 'MOCK'
 #!/usr/bin/env bash
@@ -1908,7 +2150,7 @@ mkdir -p "$WSL_DIR/wsl-proj"
 _AC_PROJECTS_DIR="$WSL_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "wsl-proj")" "#112233"
 rm -f "$LK_TEST_LOG"
-_AC_IS_WSL=1
+_AC_PLATFORM_OVERRIDE="wsl"
 export WSL_DISTRO_NAME="Ubuntu-24.04"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$WSL_DIR/wsl-proj" >/dev/null 2>&1 || true
@@ -1924,7 +2166,7 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$WSL_DIR"
-unset _AC_WT_BIN _AC_IS_WSL WSL_DISTRO_NAME
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE WSL_DISTRO_NAME
 
 # Test: WSL_DISTRO_NAME defaults to Ubuntu when unset
 unset _AC_WT_BIN
@@ -1939,7 +2181,7 @@ mkdir -p "$WSL_DEF_DIR/wsl-def"
 _AC_PROJECTS_DIR="$WSL_DEF_DIR"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "wsl-def")" "#445566"
 rm -f "$LK_TEST_LOG"
-_AC_IS_WSL=1
+_AC_PLATFORM_OVERRIDE="wsl"
 unset WSL_DISTRO_NAME
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$WSL_DEF_DIR/wsl-def" >/dev/null 2>&1 || true
@@ -1953,7 +2195,7 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$WSL_DEF_DIR"
-unset _AC_WT_BIN _AC_IS_WSL
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE
 
 # ═══════════════════════════════════════
 echo "── Cross-Platform: Script File ──"
@@ -1974,8 +2216,7 @@ mkdir -p "$SCRIPT_DIR2/script-proj"
 _AC_PROJECTS_DIR="$SCRIPT_DIR2"
 _ac_assign "_AC_PROJECT_COLOR_$(_ac_safe_name "script-proj")" "#998877"
 rm -f "$LK_TEST_LOG"
-_AC_IS_WSL=0
-unset MSYSTEM
+_AC_PLATFORM_OVERRIDE="linux"
 _AC_WT_BIN="$MOCK_BIN/wt.exe"
 _ac_launch_project "$SCRIPT_DIR2/script-proj" >/dev/null 2>&1 || true
 cd "$PROJECT_DIR" || true   # launching cds the shell; restore it
@@ -1994,7 +2235,7 @@ else
 fi
 rm -f "$MOCK_BIN/wt.exe" "$LK_TEST_LOG"
 rm -rf "$SCRIPT_TMP" "$SCRIPT_DIR2"
-unset TMPDIR _AC_WT_BIN _AC_IS_WSL
+unset TMPDIR _AC_WT_BIN _AC_PLATFORM_OVERRIDE
 
 # Restore simple mock
 cat > "$MOCK_BIN/kiro-cli" << 'MOCK'
@@ -2966,6 +3207,51 @@ PATH="$OLD_PATH_PY"
 rm -f "$MOCK_BIN/python"
 
 # ═══════════════════════════════════════
+echo "── Regression: WT prereqs failure message is bare (no double \"Failed:\") ──"
+# _ac_apply_theme_windows and _ac_reset_theme_windows are always invoked as
+# `result=$(... 2>&1)` by _ac_config_theme, which wraps whatever they print
+# in its own "✗ Failed: %s". Before _ac_wt_prereqs_fail_msg existed,
+# _ac_apply_theme_windows's own Python-missing message already contained
+# "✗ Failed:", so a real failure rendered as "✗ Failed:   ✗ Failed: ...".
+# The shared message must be bare: no leading "✗", no "Failed:", no color
+# escape -- callers that display it directly (_ac_config_theme_font) add
+# their own wrapper instead.
+_AC_WT_SETTINGS_MISSING=1
+_AC_WT_PYTHON_MISSING=""
+settings_msg="$(_ac_wt_prereqs_fail_msg)"
+if [[ "$settings_msg" != *'Failed'* && "$settings_msg" != *'✗'* && "$settings_msg" != *$'\e['* ]]; then
+    printf '  \e[32m✓\e[0m wt-prereqs-msg: settings-missing message is bare\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-prereqs-msg: settings-missing message should be bare\n    actual: %s\n' "$settings_msg"; ((FAIL++))
+fi
+assert_contains "wt-prereqs-msg: settings-missing names the file" "settings.json" "$settings_msg"
+
+_AC_WT_SETTINGS_MISSING=""
+_AC_WT_PYTHON_MISSING=1
+python_msg="$(_ac_wt_prereqs_fail_msg)"
+if [[ "$python_msg" != *'Failed'* && "$python_msg" != *'✗'* && "$python_msg" != *$'\e['* ]]; then
+    printf '  \e[32m✓\e[0m wt-prereqs-msg: python-missing message is bare\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m wt-prereqs-msg: python-missing message should be bare\n    actual: %s\n' "$python_msg"; ((FAIL++))
+fi
+assert_contains "wt-prereqs-msg: python-missing names Python" "Python" "$python_msg"
+unset _AC_WT_SETTINGS_MISSING _AC_WT_PYTHON_MISSING
+
+# End-to-end: force settings detection to fail (stubbed in a subshell so the
+# real _ac_detect_wt_settings is untouched afterward -- this must not depend
+# on the test machine happening to have no real Windows Terminal settings
+# reachable, which would make _ac_apply_theme_windows write to a real
+# settings.json instead of exercising the failure path at all).
+(
+    _ac_detect_wt_settings() { printf ''; }
+    apply_fail="$(_ac_apply_theme_windows "${_AC_THEMES[1]}" 2>&1)"
+    wrapped="  ✗ Failed: ${apply_fail}"
+    failed_count=$(grep -o 'Failed:' <<< "$wrapped" | wc -l | tr -d ' ')
+    [[ "$failed_count" == "1" ]]
+)
+assert_exit "wt-prereqs-msg: end-to-end wrap has exactly one \"Failed:\"" 0 "$?"
+
+# ═══════════════════════════════════════
 echo "── Theme: Default Entry ──"
 
 # Test: Default theme is first in the themes array
@@ -3518,7 +3804,7 @@ chmod +x "$SEC_WT"
 export SEC_SCRIPT_OUT="$SEC_TMP/script-path"
 
 _AC_WT_BIN="$SEC_WT"
-_AC_IS_WSL=0
+_AC_PLATFORM_OVERRIDE="linux"
 SEC_BASE="$(basename "$EVIL_DIR")"
 _ac_assign "_AC_PROJECT_TITLE_$(_ac_safe_name "$SEC_BASE")" "T"
 TMPDIR="$SEC_TMP" _ac_launch_project "$EVIL_DIR" >/dev/null 2>&1
@@ -3547,7 +3833,7 @@ if [[ -n "$SEC_SCRIPT" ]]; then
     esac
 fi
 
-unset _AC_WT_BIN _AC_IS_WSL _AC_LAUNCHED_NEW_TAB SEC_SCRIPT_OUT
+unset _AC_WT_BIN _AC_PLATFORM_OVERRIDE _AC_LAUNCHED_NEW_TAB SEC_SCRIPT_OUT
 rm -rf "$SEC_TMP"
 
 # Stale tab scripts are swept
@@ -4797,6 +5083,19 @@ assert_eq "sessions: round-trip reload" "true" "$_AC_SHOW_SESSIONS"
 rm -f "$SESS_CONFIG" "$SESS_CONFIG2"
 
 # ═══════════════════════════════════════
+echo "── _ac_str_lt: locale-independent string comparison ──"
+# The no-jq session fallback compares ISO8601 timestamps as strings to find
+# the newest one, which is only correct under byte-wise (C-locale) collation.
+# _ac_str_lt exists so that comparison can be forced to C regardless of the
+# user's locale via `LC_ALL=C _ac_str_lt a b` (a bare `LC_ALL=C [[ a < b ]]`
+# is not valid bash -- [[ is a keyword, not a simple command).
+assert_eq "str-lt: a < b is true" "0" "$(LC_ALL=C _ac_str_lt "a" "b"; echo $?)"
+assert_eq "str-lt: b < a is false" "1" "$(LC_ALL=C _ac_str_lt "b" "a"; echo $?)"
+assert_eq "str-lt: equal is false" "1" "$(LC_ALL=C _ac_str_lt "a" "a"; echo $?)"
+assert_eq "str-lt: ISO8601 timestamps order chronologically" "0" \
+    "$(LC_ALL=C _ac_str_lt "2026-09-04T13:00:00Z" "2026-09-04T14:00:00Z"; echo $?)"
+
+# ═══════════════════════════════════════
 echo "── Session summary parsing ──"
 # T2.3: _ac_session_summary parses the newest non-empty session.
 # _ac_iso_to_epoch: portable ISO8601 -> epoch.
@@ -5236,10 +5535,10 @@ assert_contains "doctor: names the projects directory" "$DOC_ROOT" "$doc_clean"
 assert_contains "doctor: reports the configured CLI" "kiro-cli" "$doc_clean"
 assert_contains "doctor: delegates to the platform check" "platform check" "$doc_clean"
 
-# Regression: doctor reports the type -P resolved binary path (not just "on
-# PATH"). The mock kiro-cli lives in $MOCK_BIN, which is prepended to PATH, so
-# `type -P kiro-cli` must resolve there.
-assert_contains "doctor: reports resolved CLI path via type -P" \
+# Regression: doctor reports the _ac_resolve_bin resolved binary path (not
+# just "on PATH"). The mock kiro-cli lives in $MOCK_BIN, which is prepended
+# to PATH, so _ac_resolve_bin must resolve there.
+assert_contains "doctor: reports resolved CLI path via _ac_resolve_bin" \
     "kiro-cli on PATH → $MOCK_BIN/kiro-cli" "$doc_clean"
 
 # Regression: doctor warns when a shell alias shadows the configured CLI, and
@@ -5512,31 +5811,45 @@ _AC_CONFIG_FILE="$_setup_prec_cfg_saved"
 rm -rf "$_setup_prec_home"
 
 # ═══════════════════════════════════════
+echo "── _ac_resolve_bin: portable type -P / whence -p ──"
+# Regression: zsh's `type` builtin has no -P flag at all ("bad option: -P"),
+# so a bare `type -P` (used directly, not through this shim) silently broke
+# CLI resolution -- and therefore the whole new-tab launch path -- for every
+# zsh user. _ac_resolve_bin is the portable stand-in this file must use
+# instead; these assertions run under whichever shell actually executes this
+# suite (bash in CI), confirming its own branch behaves like `type -P`.
+resolved_bash_bin="$(_ac_resolve_bin bash)"
+assert_eq "resolve-bin: resolves a real command to an executable path" 0 "$([[ -x "$resolved_bash_bin" ]]; echo $?)"
+resolved_missing="$(_ac_resolve_bin definitely-not-a-real-command-xyz)"
+assert_eq "resolve-bin: nothing on PATH yields empty" "" "$resolved_missing"
+
+# ═══════════════════════════════════════
 echo "── Regression: CLI resolution under a shadowing alias ──"
 # Bug: the new-tab path resolved the CLI with `command -v "$_AC_CLI_TOOL"`.
 # When the tool name is shadowed by a shell alias (e.g. a security wrapper
 # aliases `kiro-cli` to `kiro-guard`), `command -v` prints the alias definition
 # text ("alias kiro-cli='kiro-guard'") in an interactive shell, and exec-ing
-# that literal fails with exit 127. `type -P` must be used instead — it only
-# ever yields an executable path. This guards the fix.
+# that literal fails with exit 127. _ac_resolve_bin (bash: `type -P`, zsh:
+# `whence -p`) must be used instead — it only ever yields an executable path.
+# This guards the fix.
 (
     # Define the alias, then confirm the resolution primitive the launcher uses
-    # (type -P) ignores it and returns the real mock binary path.
+    # (_ac_resolve_bin) ignores it and returns the real mock binary path.
     alias kiro-cli='some-guard-wrapper'
-    resolved="$(type -P kiro-cli 2>/dev/null)"
+    resolved="$(_ac_resolve_bin kiro-cli)"
     # The value must be a path to an executable, never alias text.
     if [[ "$resolved" == *"alias "* ]]; then
-        printf '  \e[31m✗\e[0m alias: type -P must not return alias text\n'
+        printf '  \e[31m✗\e[0m alias: _ac_resolve_bin must not return alias text\n'
         exit 1
     fi
     [[ -n "$resolved" && -x "$resolved" ]]
 )
-assert_exit "alias: type -P resolves a real executable under a shadowing alias" 0 "$?"
+assert_exit "alias: _ac_resolve_bin resolves a real executable under a shadowing alias" 0 "$?"
 
 # The generated launch script must NOT contain alias-definition text and must
 # invoke a real path. Verify by inspecting the resolution the launcher performs.
 _AC_CLI_TOOL="kiro-cli"
-cli_bin_probe="$(type -P "$_AC_CLI_TOOL" 2>/dev/null)"
+cli_bin_probe="$(_ac_resolve_bin "$_AC_CLI_TOOL")"
 assert_eq "alias: launcher resolves cli_bin to the mock path" "$MOCK_BIN/kiro-cli" "$cli_bin_probe"
 
 # ═══════════════════════════════════════

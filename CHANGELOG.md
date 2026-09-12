@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.1.0
+
+Renamed the project from anycli to **anycli-launcher**. Breaking change —
+see "Upgrading from anycli?" in the README.
+
+### Changed
+- The project, entry file (`anycli.bash` → `anycli-launcher.bash`), and
+  config directory (`~/.config/anycli/` → `~/.config/anycli-launcher/`) are
+  renamed. The `ac` command and its `_ac_`/`_AC_` internal identifier prefix
+  are **unchanged**.
+
 ## 3.0.0
 
 Renamed the project from kiro-launcher to **anycli**. Breaking change — see

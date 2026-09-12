@@ -1,10 +1,10 @@
-# Install anycli
+# Install anycli-launcher
 
-Interactive installation skill for anycli. Guides the user through shell selection and installation; the tool's own first-run wizard handles configuration.
+Interactive installation skill for anycli-launcher. Guides the user through shell selection and installation; the tool's own first-run wizard handles configuration.
 
 ## Trigger
 
-User says "install", "set up", "configure anycli", or similar.
+User says "install", "set up", "configure anycli-launcher", or similar.
 
 ## Procedure
 
@@ -13,9 +13,9 @@ User says "install", "set up", "configure anycli", or similar.
 Before asking anything, gather context silently:
 
 1. Check which shells are available: `zsh --version`, `bash --version`
-2. Check if already installed by looking for `anycli.bash` in `~/.zshrc` or `~/.bashrc`
-3. Check if `~/.config/anycli/config.yaml` already exists
-4. Check whether any known AI CLI (`claude`, `kiro-cli`, `aider`, `goose`, `codex`, `amp`, or another the user names) is on PATH — anycli is CLI-agnostic, so this is informational, not a hard requirement
+2. Check if already installed by looking for `anycli-launcher.bash` in `~/.zshrc` or `~/.bashrc`
+3. Check if `~/.config/anycli-launcher/config.yaml` already exists
+4. Check whether any known AI CLI (`claude`, `kiro-cli`, `aider`, `goose`, `codex`, `amp`, or another the user names) is on PATH — anycli-launcher is CLI-agnostic, so this is informational, not a hard requirement
 
 ### Step 2: Shell Selection
 
@@ -38,23 +38,23 @@ Based on selection, append the source line to the appropriate RC file:
 
 **zsh** — append to `~/.zshrc`:
 ```bash
-# anycli
-source ~/projects/anycli/anycli.bash
+# anycli-launcher
+source ~/projects/anycli-launcher/anycli-launcher.bash
 ```
 
 **bash** — append to `~/.bashrc`:
 ```bash
-# anycli
-source ~/projects/anycli/anycli.bash
+# anycli-launcher
+source ~/projects/anycli-launcher/anycli-launcher.bash
 ```
 
-Adjust the path if the user cloned anycli somewhere other than `~/projects/anycli`.
+Adjust the path if the user cloned anycli-launcher somewhere other than `~/projects/anycli-launcher`.
 
 After appending, confirm success and tell the user to reload their shell (or offer to reload for them).
 
 ### Step 4: Hand off to the built-in wizard
 
-Don't collect configuration in this skill — anycli's own first-run wizard does that (projects directory, which AI CLI to launch, default flags) the first time `ac` is run with no config file present, and writes `~/.config/anycli/config.yaml` directly.
+Don't collect configuration in this skill — anycli-launcher's own first-run wizard does that (projects directory, which AI CLI to launch, default flags) the first time `ac` is run with no config file present, and writes `~/.config/anycli-launcher/config.yaml` directly.
 
 Just tell the user to run `ac` to go through it. If they want to change something later, `ac setup` re-runs the same three questions with current values pre-filled, and `ac` → `c` opens the full config menu.
 

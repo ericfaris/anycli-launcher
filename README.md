@@ -1,4 +1,4 @@
-# anycli
+# anycli-launcher
 
 If you keep all your coding projects in one folder and use AI CLI tools as your pair programmer, this tool saves you a few steps every time you sit down to work. Instead of manually cd-ing into a project and typing your CLI command, you just run `ac` and type a number — the launcher drops you into the right directory and opens your AI assistant automatically.
 
@@ -10,7 +10,7 @@ If you keep all your coding projects in one folder and use AI CLI tools as your 
 
 ```
   ╭─────────────────────────────────────╮
-  │  anycli                     v3.0.0  │
+  │  anycli-launcher            v3.1.0  │
   ╰─────────────────────────────────────╯
 
    1  ● terminal
@@ -38,7 +38,7 @@ bash 4+ (source from `~/.bashrc` or `~/.zshrc`)
 
 ### 2. AI CLI Tool
 
-At least one AI CLI tool on your PATH. anycli is CLI-agnostic — there's no
+At least one AI CLI tool on your PATH. anycli-launcher is CLI-agnostic — there's no
 privileged default; pick whichever tool you use. These are auto-detected on
 the first-run wizard, and you can type any other command name manually:
 
@@ -65,35 +65,43 @@ even on Windows — bash cannot use `C:\...` backslash paths. On Git Bash,
 
 ```bash
 # WSL2 / Linux / macOS
-git clone https://github.com/ericfaris/anycli.git ~/projects/anycli
+git clone https://github.com/ericfaris/anycli-launcher.git ~/projects/anycli-launcher
 
 # Windows Git Bash (~ is your Windows home, e.g. C:\Users\you)
-git clone https://github.com/ericfaris/anycli.git ~/projects/anycli
+git clone https://github.com/ericfaris/anycli-launcher.git ~/projects/anycli-launcher
 ```
 
-2. Source it from your shell config (use the entry file `anycli.bash`):
+2. Source it from your shell config (use the entry file `anycli-launcher.bash`):
 
 ```bash
 # ~/.bashrc (bash on WSL2 / Linux / Git Bash) or ~/.zshrc (zsh)
-source ~/projects/anycli/anycli.bash
+source ~/projects/anycli-launcher/anycli-launcher.bash
 ```
 
    If you cloned somewhere else, use that path in Unix form — e.g. a repo at
-   `C:\code\anycli` is sourced as `source /c/code/anycli/anycli.bash`.
+   `C:\code\anycli-launcher` is sourced as `source /c/code/anycli-launcher/anycli-launcher.bash`.
 
 3. Reload your shell (`source ~/.bashrc`) or open a new terminal, then run `ac`.
 
 > **WSL2 and Git Bash are separate environments** with separate configs
-> (`~/.config/anycli/config.yaml` in each home). If you use both, install
+> (`~/.config/anycli-launcher/config.yaml` in each home). If you use both, install
 > and configure the launcher in each — clone into each environment's filesystem
 > rather than sourcing a WSL clone from Git Bash (the `//wsl.localhost/...` path
 > is slow and unreliable).
 
 > **Upgrading from kiro-launcher?** This project was renamed from
-> kiro-launcher to anycli, and the `lk` command is now `ac`. Re-clone under
-> the new name, update your shell config's `source .../anycli.bash` line, and
-> move `~/.config/kiro-launcher/` to `~/.config/anycli/` (or just re-run
+> kiro-launcher to anycli (and later to anycli-launcher), and the `lk`
+> command is now `ac`. Re-clone under the new name, update your shell
+> config's `source .../anycli-launcher.bash` line, and move
+> `~/.config/kiro-launcher/` to `~/.config/anycli-launcher/` (or just re-run
 > `ac setup`).
+
+> **Upgrading from anycli?** This project was renamed from anycli to
+> **anycli-launcher** — the `ac` command is unchanged. Re-clone (or
+> `git remote set-url origin git@github.com:ericfaris/anycli-launcher.git`
+> in your existing clone), update your shell config's
+> `source .../anycli-launcher.bash` line, and move `~/.config/anycli/` to
+> `~/.config/anycli-launcher/` (or just re-run `ac setup`).
 
 ## First run
 
@@ -115,7 +123,7 @@ manual config editing required:
 3. **Default flags?** — optional flags passed to every launch (e.g.
    `--trust-all-tools`). Press Enter to skip.
 
-It writes `~/.config/anycli/config.yaml` and opens the menu in the same
+It writes `~/.config/anycli-launcher/config.yaml` and opens the menu in the same
 invocation. You can change any of these later via `ac` → `c`.
 
 You can re-run the guided setup any time with `ac setup`. It revisits the three
@@ -134,18 +142,18 @@ The launcher checks for updates automatically (once per 24 hours) and shows an i
 To update manually on Windows (Git Bash or WSL2):
 
 ```bash
-cd ~/projects/anycli
+cd ~/projects/anycli-launcher
 git pull
 ```
 
-Then open a new terminal (or run `source ~/.bashrc`) and run `ac`. Verify the header shows `v3.0.0`.
+Then open a new terminal (or run `source ~/.bashrc`) and run `ac`. Verify the header shows `v3.1.0`.
 
 ## Configuration
 
 Configuration is stored in YAML at:
 
 ```
-~/.config/anycli/config.yaml
+~/.config/anycli-launcher/config.yaml
 ```
 
 You can edit this file directly or use the built-in config menu (`ac` → `c`).

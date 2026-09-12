@@ -4,7 +4,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-printf '\e[1m══ anycli Test Suite ══\e[0m\n\n'
+printf '\e[1m══ anycli-launcher Test Suite ══\e[0m\n\n'
 
 # --- Lint gate: shellcheck (skips gracefully if not installed) ---
 # Gates the production script only. Uses the repo .shellcheckrc, which documents
@@ -13,10 +13,10 @@ printf '\e[1m══ anycli Test Suite ══\e[0m\n\n'
 if command -v shellcheck >/dev/null 2>&1; then
     printf '\e[1m── Lint: shellcheck ──\e[0m\n'
     _lint_ok=1
-    if shellcheck -s bash "$PROJECT_DIR/anycli.bash"; then
-        printf '  \e[32m✓\e[0m shellcheck: anycli.bash clean\n'
+    if shellcheck -s bash "$PROJECT_DIR/anycli-launcher.bash"; then
+        printf '  \e[32m✓\e[0m shellcheck: anycli-launcher.bash clean\n'
     else
-        printf '  \e[31m✗\e[0m shellcheck: anycli.bash has findings (see above)\n'
+        printf '  \e[31m✗\e[0m shellcheck: anycli-launcher.bash has findings (see above)\n'
         _lint_ok=0
     fi
     if shellcheck -s bash "$SCRIPT_DIR/check-platform.sh"; then

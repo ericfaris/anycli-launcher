@@ -48,7 +48,7 @@ jobs:
       - name: _ac_platform reports gitbash without any override
         shell: bash
         run: |
-          source ./anycli.bash
+          source ./anycli-launcher.bash
           detected="$(_ac_platform)"
           echo "detected: $detected"
           [[ "$detected" == "gitbash" ]] || { echo "FAIL: expected gitbash, got $detected"; exit 1; }
@@ -68,7 +68,7 @@ jobs:
           EOF
           chmod +x "$MOCK_BIN/claude"
           export PATH="$MOCK_BIN:$PATH"
-          source ./anycli.bash
+          source ./anycli-launcher.bash
           export _AC_CONFIG_FILE="$(mktemp)"
           cat > "$_AC_CONFIG_FILE" << 'CFG'
           cli_tool: "claude"
@@ -103,7 +103,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zsh
       - name: zsh --version
         run: zsh --version
-      - name: Source anycli.bash under zsh and exercise ac
+      - name: Source anycli-launcher.bash under zsh and exercise ac
         shell: zsh -e {0}
         run: |
           set -u
@@ -115,12 +115,12 @@ jobs:
           chmod +x "$MOCK_BIN/claude"
           export PATH="$MOCK_BIN:$PATH"
 
-          source ./anycli.bash
+          source ./anycli-launcher.bash
           echo "sourced OK under zsh $ZSH_VERSION"
 
-          # A fresh runner has no ~/.config/anycli/config.yaml, and
+          # A fresh runner has no ~/.config/anycli-launcher/config.yaml, and
           # _ac_load_config (called from inside ac()) resets _AC_CLI_TOOL to
-          # empty (anycli has no privileged default CLI) regardless of what's
+          # empty (anycli-launcher has no privileged default CLI) regardless of what's
           # set beforehand -- so the only way to make it pick up "claude" is
           # via a real config file, same as this project's actual local setup.
           export _AC_CONFIG_FILE="$(mktemp)"
@@ -134,7 +134,7 @@ jobs:
 
           menu_output=$(echo "q" | ac 2>&1)
           echo "$menu_output"
-          for needle in "anycli" "terminal" "(root)" "demo-project"; do
+          for needle in "anycli-launcher" "terminal" "(root)" "demo-project"; do
             case "$menu_output" in
               *"$needle"*) echo "OK: contains '$needle'" ;;
               *) echo "FAIL: missing '$needle'"; exit 1 ;;

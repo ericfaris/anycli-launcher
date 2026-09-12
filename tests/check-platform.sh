@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# check-platform.sh — verify anycli's runtime dependencies and platform
+# check-platform.sh — verify anycli-launcher's runtime dependencies and platform
 # capabilities on the current machine. Run this on any OS (Linux, macOS, WSL2,
 # Git Bash) to confirm the launcher — and especially the session-resume feature
 # — will work before relying on it.
@@ -32,19 +32,19 @@ head_line() { printf '\n%s── %s ──%s\n' "$C_DIM" "$1" "$C_RST"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # --- Platform detection -----------------------------------------------------
-# Reuses anycli.bash's own _ac_platform() (single source of truth for
+# Reuses anycli-launcher.bash's own _ac_platform() (single source of truth for
 # wsl/gitbash/macos/linux detection) rather than maintaining a second copy of
 # the same /proc/version + $MSYSTEM + `uname -s` signals here, which could
 # silently drift out of sync with the launcher's own idea of the platform.
 # Sourcing is safe: this script always runs as its own `bash` process (never
-# `source`d into an interactive shell), so anycli.bash's function/variable
+# `source`d into an interactive shell), so anycli-launcher.bash's function/variable
 # definitions never escape into anything the user is using. Falls back to a
-# standalone copy of the same three-signal detection only if anycli.bash
+# standalone copy of the same three-signal detection only if anycli-launcher.bash
 # can't be found next to this script (e.g. it was copied out on its own).
 _CP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$_CP_SCRIPT_DIR/../anycli.bash" ]]; then
+if [[ -f "$_CP_SCRIPT_DIR/../anycli-launcher.bash" ]]; then
     # shellcheck source=/dev/null
-    source "$_CP_SCRIPT_DIR/../anycli.bash"
+    source "$_CP_SCRIPT_DIR/../anycli-launcher.bash"
     detect_platform() {
         case "$(_ac_platform)" in
             wsl)     echo "WSL2" ;;
@@ -72,7 +72,7 @@ fi
 
 PLATFORM="$(detect_platform)"
 
-printf '%sanycli platform check%s\n' "$C_DIM" "$C_RST"
+printf '%sanycli-launcher platform check%s\n' "$C_DIM" "$C_RST"
 printf 'Platform: %s\n' "$PLATFORM"
 printf 'Shell: bash %s\n' "${BASH_VERSION:-unknown}"
 
@@ -158,7 +158,7 @@ fi
 head_line "AI CLI"
 # Try to read the configured tool from the user's config; default to kiro-cli.
 CLI_TOOL="kiro-cli"
-CFG="${HOME}/.config/anycli/config.yaml"
+CFG="${HOME}/.config/anycli-launcher/config.yaml"
 if [[ -f "$CFG" ]]; then
     _t="$(grep -E '^cli_tool:' "$CFG" 2>/dev/null | head -1 | sed -E 's/^cli_tool:[[:space:]]*"?([^"]*)"?.*/\1/')"
     [[ -n "$_t" ]] && CLI_TOOL="$_t"

@@ -57,7 +57,7 @@ export PATH="$MOCK_BIN:$PATH"
 export LK_TEST_LOG="$SCRIPT_DIR/.test-kiro.log"
 
 # Source the launcher
-source "$PROJECT_DIR/anycli.bash"
+source "$PROJECT_DIR/anycli-launcher.bash"
 
 # Marker for cleaning up generated tab scripts created during THIS run. The
 # launcher writes ac-tab-*.sh into ${TMPDIR:-/tmp} and only self-deletes them
@@ -113,7 +113,7 @@ _ac_load_config
 # Capture menu output (q to quit the loop)
 menu_output=$(echo "q" | ac 2>/dev/null || true)
 
-assert_contains "menu: has header" "anycli" "$menu_output"
+assert_contains "menu: has header" "anycli-launcher" "$menu_output"
 assert_contains "menu: has terminal entry" "terminal" "$menu_output"
 assert_contains "menu: has root entry" "(root)" "$menu_output"
 assert_contains "menu: has alpha" "alpha" "$menu_output"
@@ -138,10 +138,10 @@ exit_code=$?
 assert_eq "selection: invalid number exits cleanly" "0" "$exit_code"
 
 result=$(echo "abc" | ac 2>/dev/null || true)
-assert_contains "selection: non-numeric renders menu" "anycli" "$result"
+assert_contains "selection: non-numeric renders menu" "anycli-launcher" "$result"
 
 result=$(echo "" | ac 2>/dev/null || true)
-assert_contains "selection: empty input renders menu" "anycli" "$result"
+assert_contains "selection: empty input renders menu" "anycli-launcher" "$result"
 
 # Test: q quits the main menu
 result=$(echo "q" | ac 2>/dev/null || true)
@@ -537,7 +537,7 @@ _AC_CONFIG_FILE="$FIXTURES/config.yaml"
 _ac_load_config
 export AC_PROJECTS_DIR="$FIXTURES/projects"  # need this for ac() to find the dir
 config_output=$(printf 'c\nb\n' | ac 2>/dev/null || true)
-assert_contains "config: c opens config submenu" "anycli Config" "$config_output"
+assert_contains "config: c opens config submenu" "anycli-launcher Config" "$config_output"
 assert_contains "config: shows projects directory" "Projects directory" "$config_output"
 assert_contains "config: shows default flags" "Default flags" "$config_output"
 assert_contains "config: shows per-project flags" "Per-project flags" "$config_output"
@@ -872,7 +872,7 @@ rm -f /tmp/ac-flags-hangy-cli.cache
 
 _hang_start=$(date +%s)
 timeout 20 bash -c '
-    source "'"$PROJECT_DIR"'/anycli.bash"
+    source "'"$PROJECT_DIR"'/anycli-launcher.bash"
     _ac_parse_cli_flags hangy-cli ""
 ' >/dev/null 2>&1
 _hang_elapsed=$(( $(date +%s) - _hang_start ))
@@ -1096,14 +1096,14 @@ echo "── Self-Inclusion ──"
 
 # Test: launcher directory is shown in menu when inside projects dir
 EXCL_DIR=$(mktemp -d)
-mkdir -p "$EXCL_DIR/real-project" "$EXCL_DIR/anycli"
+mkdir -p "$EXCL_DIR/real-project" "$EXCL_DIR/anycli-launcher"
 _AC_CONFIG_FILE="/nonexistent"
 export AC_PROJECTS_DIR="$EXCL_DIR"
-_AC_SCRIPT_DIR="$EXCL_DIR/anycli"
+_AC_SCRIPT_DIR="$EXCL_DIR/anycli-launcher"
 _ac_load_config
 menu_output=$(echo "q" | ac 2>/dev/null || true)
 assert_contains "self-include: real project shown" "real-project" "$menu_output"
-assert_contains "self-include: launcher dir shown in menu" "anycli" "$menu_output"
+assert_contains "self-include: launcher dir shown in menu" "anycli-launcher" "$menu_output"
 
 # Restore
 _AC_SCRIPT_DIR="$PROJECT_DIR"
@@ -1314,7 +1314,7 @@ _ac_load_config
 # Select the project (entry 3), then menu should loop — we send 'q' to exit
 loop_output=$(printf '3\nq\n' | ac 2>/dev/null || true)
 # The menu should render twice (once before selection, once after loop-back)
-menu_count=$(echo "$loop_output" | grep -c "anycli" || true)
+menu_count=$(echo "$loop_output" | grep -c "anycli-launcher" || true)
 if (( menu_count >= 2 )); then
     printf '  \e[32m✓\e[0m menu-loop: menu re-renders after new-tab launch\n'; ((PASS++))
 else
@@ -1873,7 +1873,7 @@ fi
 # ═══════════════════════════════════════
 echo "── check-platform.sh: shares _ac_platform() instead of its own copy ──"
 
-# check-platform.sh sources anycli.bash and delegates its detect_platform()
+# check-platform.sh sources anycli-launcher.bash and delegates its detect_platform()
 # to _ac_platform(), rather than maintaining a second, independently-
 # drifting copy of the same /proc/version + $MSYSTEM + `uname -s` signals.
 # Confirm the override seam is honored end-to-end through the real script
@@ -1889,7 +1889,7 @@ for _cp_plat in wsl gitbash macos linux; do
     assert_eq "check-platform: reports $_cp_plat via the override seam" "$_cp_expected" "$_cp_out"
 done
 
-# Fallback: if anycli.bash isn't reachable next to it (e.g. the script was
+# Fallback: if anycli-launcher.bash isn't reachable next to it (e.g. the script was
 # copied out on its own), check-platform.sh must still run standalone rather
 # than erroring out.
 CP_STANDALONE_DIR="$(mktemp -d)"
@@ -2293,7 +2293,7 @@ assert_eq "yaml: no-projects config loads dir" "$HOME/code" "$_AC_PROJECTS_DIR"
 assert_eq "yaml: no-projects config loads flags" "--test" "$_AC_CLI_FLAGS"
 assert_eq "yaml: no-projects config loads cli_tool" "claude" "$_AC_CLI_TOOL"
 # cli_launch: with empty value doesn't match "key: value" regex, so the
-# default (now "", since anycli has no privileged default CLI/subcommand) persists
+# default (now "", since anycli-launcher has no privileged default CLI/subcommand) persists
 assert_eq "yaml: no-projects config retains default cli_launch" "" "$_AC_CLI_LAUNCH"
 rm -f "$YAML_NO_PROJ"
 
@@ -2699,14 +2699,14 @@ echo "── Menu: Entry Count With Hidden Dir ──"
 
 # Test: launcher directory is included in menu (no self-exclusion)
 COUNT_DIR=$(mktemp -d)
-mkdir -p "$COUNT_DIR/a" "$COUNT_DIR/b" "$COUNT_DIR/c" "$COUNT_DIR/anycli"
+mkdir -p "$COUNT_DIR/a" "$COUNT_DIR/b" "$COUNT_DIR/c" "$COUNT_DIR/anycli-launcher"
 _AC_CONFIG_FILE="/nonexistent"
 export AC_PROJECTS_DIR="$COUNT_DIR"
-_AC_SCRIPT_DIR="$COUNT_DIR/anycli"
+_AC_SCRIPT_DIR="$COUNT_DIR/anycli-launcher"
 _ac_load_config
 menu_output=$(echo "q" | ac 2>/dev/null || true)
 entry_count=$(echo "$menu_output" | sed 's/\x1b\[[0-9;]*m//g' | grep -cE '^\s+[0-9]' || true)
-# Should be 6: terminal(1) + root(2) + a(3) + b(4) + c(5) + anycli(6)
+# Should be 6: terminal(1) + root(2) + a(3) + b(4) + c(5) + anycli-launcher(6)
 assert_eq "count-no-hide: 6 entries with launcher included" "6" "$entry_count"
 
 # Same count regardless of _AC_SCRIPT_DIR location
@@ -3037,7 +3037,7 @@ echo "── Regression: kiro-cli update no -y flag ──"
 # "kiro-cli update" (it's only reachable when _AC_CLI_TOOL is "kiro-cli" in
 # the first place -- see _ac_update_probe), so it must be set explicitly
 # here rather than relying on it surviving from earlier in the file. The
-# _ac_load_config call a few tests up reset it to "" (anycli's default is no
+# _ac_load_config call a few tests up reset it to "" (anycli-launcher's default is no
 # privileged CLI), which is exactly the kind of regression this guards.
 _AC_CLI_TOOL="kiro-cli"
 
@@ -3511,7 +3511,7 @@ _AC_AUTO_UPDATE_CHECK="true"
 # Clear bash's command path cache after mock changes
 hash -r
 # Restore real _ac_update_check (overridden by menu rendering tests above)
-source "$PROJECT_DIR/anycli.bash" 2>/dev/null
+source "$PROJECT_DIR/anycli-launcher.bash" 2>/dev/null
 
 # Restore kiro-cli and curl mocks
 cat > "$_AC_TEST_MOCK_DIR/kiro-cli" << 'MOCKEOF'
@@ -3639,7 +3639,7 @@ export LC_ALL=C.utf8
 _AC_VERSION="1.9.3"
 header_output=$(
     c_title=$'\e[1;36m'; c_dim=$'\e[2m'; reset=$'\e[0m'
-    _ac_hdr="anycli"
+    _ac_hdr="anycli-launcher"
     _ac_ver="v$_AC_VERSION"
     _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
     printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
@@ -3652,7 +3652,7 @@ assert_eq "header: short version line length" "41" "${#stripped}"
 _AC_VERSION="1.10.0"
 header_output=$(
     c_title=$'\e[1;36m'; c_dim=$'\e[2m'; reset=$'\e[0m'
-    _ac_hdr="anycli"
+    _ac_hdr="anycli-launcher"
     _ac_ver="v$_AC_VERSION"
     _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
     printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
@@ -4080,7 +4080,7 @@ else
 fi
 
 # The launcher source must contain no eval of configured values
-eval_uses=$(grep -c 'eval "\$version_cmd"\|eval "\$app_ver_cmd"' "$PROJECT_DIR/anycli.bash" || true)
+eval_uses=$(grep -c 'eval "\$version_cmd"\|eval "\$app_ver_cmd"' "$PROJECT_DIR/anycli-launcher.bash" || true)
 assert_eq "tracked: no eval of stored commands in source" "0" "$eval_uses"
 
 rm -f "$EVIL_APPS" "$APPS_CONFIG"
@@ -4200,7 +4200,7 @@ else
 fi
 
 unset _AC_WT_SETTINGS_OVERRIDE
-_AC_WT_SCHEME_BACKUP="${HOME}/.config/anycli/wt-schemes.json"
+_AC_WT_SCHEME_BACKUP="${HOME}/.config/anycli-launcher/wt-schemes.json"
 rm -rf "$THEME_TMP"
 fi
 
@@ -4469,7 +4469,7 @@ echo "── Update: CLI version cache invalidation ──"
 # The menu caches the CLI version for the shell's lifetime, so an update must
 # clear it or the header keeps reporting the old version.
 _AC_CLI_VERSION_CACHED="1.0.0-stale"
-if grep -q 'unset _AC_CLI_VERSION_CACHED' "$PROJECT_DIR/anycli.bash"; then
+if grep -q 'unset _AC_CLI_VERSION_CACHED' "$PROJECT_DIR/anycli-launcher.bash"; then
     printf '  \e[32m✓\e[0m version-cache: update path clears the cache\n'; ((PASS++))
 else
     printf '  \e[31m✗\e[0m version-cache: update path clears the cache\n'; ((FAIL++))
@@ -4620,9 +4620,9 @@ _ac_load_config
 _AC_VERSION="$(tr -d '[:space:]' < "$PROJECT_DIR/VERSION")"
 
 # --- version and help ---
-assert_eq "cli: version prints name and version" "anycli $_AC_VERSION" "$(ac version)"
-assert_eq "cli: --version matches" "anycli $_AC_VERSION" "$(ac --version)"
-assert_eq "cli: -V matches" "anycli $_AC_VERSION" "$(ac -V)"
+assert_eq "cli: version prints name and version" "anycli-launcher $_AC_VERSION" "$(ac version)"
+assert_eq "cli: --version matches" "anycli-launcher $_AC_VERSION" "$(ac --version)"
+assert_eq "cli: -V matches" "anycli-launcher $_AC_VERSION" "$(ac -V)"
 
 help_out=$(ac help)
 assert_contains "cli: help shows usage" "Usage:" "$help_out"
@@ -4722,7 +4722,7 @@ assert_eq "exists-exact: false for partial name" "1" "$_e_rc"
 
 # --- interactive form still works with no arguments ---
 menu_still=$(echo "q" | ac 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
-assert_contains "cli: bare ac still opens the menu" "anycli" "$menu_still"
+assert_contains "cli: bare ac still opens the menu" "anycli-launcher" "$menu_still"
 assert_contains "cli: menu still lists projects" "my-app" "$menu_still"
 
 # --- T1.5: resume dispatch ---
@@ -4852,7 +4852,7 @@ cleared_all=$(printf 'zzzznope\n/\nq\n' | ac 2>/dev/null | strip_ansi)
 # Only the middle render should report no matches
 assert_eq "filter: / clears the no-match state" "1" "$(grep -c 'no projects match' <<< "$cleared_all")"
 # The final render lists everything again (keep only the last menu block)
-cleared_last=$(awk '/anycli/{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' <<< "$cleared_all")
+cleared_last=$(awk '/anycli-launcher/{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' <<< "$cleared_all")
 assert_contains "filter: / restores full list" "alpha" "$cleared_last"
 # gamma is displayed under its alias
 assert_contains "filter: / restores every project" "Zebra" "$cleared_last"
@@ -4864,7 +4864,7 @@ assert_contains "filter: number selects from filtered list" "KIRO_CALLED" "$(cat
 
 # Command keys are not swallowed by the filter
 config_reached=$(printf 'c\nb\nq\n' | ac 2>/dev/null | strip_ansi)
-assert_contains "filter: c still opens config" "anycli Config" "$config_reached"
+assert_contains "filter: c still opens config" "anycli-launcher Config" "$config_reached"
 
 rm -f "$FLT_CONFIG"
 
@@ -5610,7 +5610,7 @@ mkdir -p "$_wiz_home/code/thing"
 mkdir -p "$_wiz_home/empty-root"          # exists but no subdirs — must be ignored
 
 HOME="$_wiz_home"
-_AC_CONFIG_FILE="$_wiz_home/.config/anycli/config.yaml"
+_AC_CONFIG_FILE="$_wiz_home/.config/anycli-launcher/config.yaml"
 
 # Answers: pick root #1 (~/projects), CLI #1, flags "--trust-all-tools", final Enter.
 # Run in the CURRENT shell (no pipe, no command-substitution) so the function's
@@ -5622,7 +5622,7 @@ wiz_rc=$?
 wiz_clean=$(sed 's/\x1b\[[0-9;]*m//g' "$_wiz_outfile")
 
 assert_exit "wizard: completes successfully" "0" "$wiz_rc"
-assert_contains "wizard: greets the user" "Welcome to anycli" "$wiz_clean"
+assert_contains "wizard: greets the user" "Welcome to anycli-launcher" "$wiz_clean"
 assert_contains "wizard: offers ~/projects candidate" "~/projects" "$wiz_clean"
 assert_contains "wizard: recommends ~/projects" "recommended" "$wiz_clean"
 assert_contains "wizard: offers ~/code candidate" "~/code" "$wiz_clean"
@@ -5665,7 +5665,7 @@ rm -f "$_wiz_outfile"
 # a blank Enter at the typed prompt selects (and creates) it.
 _wiz_fresh=$(mktemp -d)          # empty home — no candidate roots exist
 HOME="$_wiz_fresh"
-_AC_CONFIG_FILE="$_wiz_fresh/.config/anycli/config.yaml"
+_AC_CONFIG_FILE="$_wiz_fresh/.config/anycli-launcher/config.yaml"
 _wiz_fresh_out=$(mktemp)
 # typed prompt: blank Enter -> ~/projects; create? blank Enter (Y); CLI #1; flags blank; final Enter
 _ac_first_run_wizard > "$_wiz_fresh_out" 2>&1 <<< $'\n\n1\n\n'
@@ -5691,12 +5691,12 @@ _gate_home=$(mktemp -d)
 _gate_cfg_saved="$_AC_CONFIG_FILE"
 _gate_home_saved="$HOME"
 HOME="$_gate_home"
-_AC_CONFIG_FILE="$_gate_home/.config/anycli/config.yaml"
+_AC_CONFIG_FILE="$_gate_home/.config/anycli-launcher/config.yaml"
 
 # (a) No config, piped input (the test harness is never a TTY): old error path.
 export AC_PROJECTS_DIR="$_gate_home/does-not-exist"
 gate_out=$(printf 'q\n' | ac 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
-if [[ "$gate_out" == *"Welcome to anycli"* ]]; then
+if [[ "$gate_out" == *"Welcome to anycli-launcher"* ]]; then
     printf '  \e[31m✗\e[0m wizard: skipped when input is piped (non-TTY)\n'; ((FAIL++))
 else
     printf '  \e[32m✓\e[0m wizard: skipped when input is piped (non-TTY)\n'; ((PASS++))
@@ -5706,7 +5706,7 @@ assert_contains "wizard: piped no-config falls through to old error" \
 unset AC_PROJECTS_DIR
 
 # (b) Config present: menu renders, wizard never triggers.
-mkdir -p "$_gate_home/.config/anycli" "$_gate_home/root/proj-a"
+mkdir -p "$_gate_home/.config/anycli-launcher" "$_gate_home/root/proj-a"
 cat > "$_AC_CONFIG_FILE" << EOF
 projects_dir: "$_gate_home/root"
 default_flags: ""
@@ -5715,7 +5715,7 @@ cli_launch: "chat"
 auto_update_check: "false"
 EOF
 gate_out2=$(printf 'q\n' | ac 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
-if [[ "$gate_out2" == *"Welcome to anycli"* ]]; then
+if [[ "$gate_out2" == *"Welcome to anycli-launcher"* ]]; then
     printf '  \e[31m✗\e[0m wizard: skipped when a config already exists\n'; ((FAIL++))
 else
     printf '  \e[32m✓\e[0m wizard: skipped when a config already exists\n'; ((PASS++))

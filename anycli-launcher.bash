@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-# anycli: interactive project launcher for any AI CLI
+# anycli-launcher: interactive project launcher for any AI CLI
 # Requires: bash 4+ (source from ~/.bashrc)
 #
-# Source: source /path/to/anycli.bash
+# Source: source /path/to/anycli-launcher.bash
 
 # Version and paths
 _AC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -428,7 +428,7 @@ _ac_spin_verbose() {
     _ac_spin_run 1 "$@"
 }
 
-_AC_CONFIG_FILE="${HOME}/.config/anycli/config.yaml"
+_AC_CONFIG_FILE="${HOME}/.config/anycli-launcher/config.yaml"
 
 # Seconds the menu waits for input before giving up.
 _AC_MENU_TIMEOUT="${_AC_MENU_TIMEOUT:-300}"
@@ -493,7 +493,7 @@ _ac_load_config() {
     # Defaults
     _AC_PROJECTS_DIR="${HOME}/projects"
     _AC_CLI_FLAGS=""
-    # No privileged default CLI -- anycli launches whatever tool is
+    # No privileged default CLI -- anycli-launcher launches whatever tool is
     # configured (via the first-run wizard or config.yaml's cli_tool), not
     # one AI CLI singled out over the others in _AC_CLIS.
     _AC_CLI_TOOL=""
@@ -519,7 +519,7 @@ _ac_load_config() {
     _AC_TRACKED_APP_NAMES=()
 
     # Auto-migrate legacy flat config to YAML
-    local _AC_LEGACY_CONFIG="${HOME}/.config/anycli/config"
+    local _AC_LEGACY_CONFIG="${HOME}/.config/anycli-launcher/config"
     if [[ ! -f "$_AC_CONFIG_FILE" && -f "$_AC_LEGACY_CONFIG" ]]; then
         _ac_migrate_legacy "$_AC_LEGACY_CONFIG"
     fi
@@ -1370,7 +1370,7 @@ _ac_config_toggle_git_status() {
 }
 
 # --- Theme System ---
-_AC_THEME_FILE="${HOME}/.config/anycli/theme.bash"
+_AC_THEME_FILE="${HOME}/.config/anycli-launcher/theme.bash"
 
 # Theme definitions: name|bg|fg|cursor|black|red|green|yellow|blue|purple|cyan|white|br_black|br_red|br_green|br_yellow|br_blue|br_purple|br_cyan|br_white|ps1_style
 # PS1 styles: minimal, arrow, powerline, lambda
@@ -1560,7 +1560,7 @@ def profile_key(profile, index):
 
 # Where the pre-theme colorScheme of each profile is recorded so that resetting
 # restores what the user had rather than deleting the field outright.
-_AC_WT_SCHEME_BACKUP="${HOME}/.config/anycli/wt-schemes.json"
+_AC_WT_SCHEME_BACKUP="${HOME}/.config/anycli-launcher/wt-schemes.json"
 
 # Detect the two prerequisites every Windows Terminal settings.json mutation
 # needs: the settings file itself, and a working Python interpreter to edit
@@ -1773,8 +1773,8 @@ _ac_apply_theme_linux() {
     esac
 
     cat > "$_AC_THEME_FILE" <<EOF
-# anycli Theme: $name
-# Applied by anycli — do not edit manually
+# anycli-launcher Theme: $name
+# Applied by anycli-launcher — do not edit manually
 
 # Git prompt support
 if [[ -f /usr/lib/git-core/git-sh-prompt ]]; then
@@ -2192,7 +2192,7 @@ _ac_config_menu() {
         local c_val=$'\e[0;35m'
 
         printf '\n'
-        printf "  %s──  anycli Config  ────────%s\n\n" "$c_title" "$reset"
+        printf "  %s──  anycli-launcher Config  ────────%s\n\n" "$c_title" "$reset"
         printf "  %s 1%s  %sProjects directory%s   %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_AC_PROJECTS_DIR" "$reset"
         printf "  %s 2%s  %sDefault flags%s        %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_AC_CLI_FLAGS:-(none)}" "$reset"
         printf "  %s 3%s  %sPer-project flags%s\n" "$c_num" "$reset" "$c_name" "$reset"
@@ -2676,7 +2676,7 @@ _ac_timeout() {
 }
 
 # --- Update Detection ---
-_AC_UPDATE_CACHE="${HOME}/.config/anycli/.update-check"
+_AC_UPDATE_CACHE="${HOME}/.config/anycli-launcher/.update-check"
 _AC_UPDATE_CHECK_INTERVAL=14400  # 4 hours in seconds
 _AC_CLI_RELEASE_INDEX="https://desktop-release.q.us-east-1.amazonaws.com/index.json"
 
@@ -2849,7 +2849,7 @@ _ac_update_probe() {
         _ac_check_cli_update_via_index || true
     fi
 
-    # 2. anycli, via git
+    # 2. anycli-launcher, via git
     if [[ -d "$_AC_SCRIPT_DIR/.git" ]]; then
         _ac_timeout 10 git -C "$_AC_SCRIPT_DIR" fetch origin main --quiet 2>/dev/null || true
         local behind
@@ -3035,7 +3035,7 @@ _ac_update_launcher() {
         return 1
     fi
 
-    _ac_spin_verbose "Updating anycli..." \
+    _ac_spin_verbose "Updating anycli-launcher..." \
         git -C "$dir" pull --ff-only origin main || return 1
 
     _AC_VERSION="$(cat "$dir/VERSION" 2>/dev/null || echo "dev")"
@@ -3043,7 +3043,7 @@ _ac_update_launcher() {
 
     # Reload the new definitions so the running shell actually gets the update.
     # Parse first: sourcing a broken file would break the caller's shell.
-    local src="$dir/anycli.bash"
+    local src="$dir/anycli-launcher.bash"
     if [[ -f "$src" ]] && bash -n "$src" 2>/dev/null; then
         # shellcheck source=/dev/null
         source "$src"
@@ -3086,7 +3086,7 @@ _ac_do_update() {
 
     if [[ "${_AC_LAUNCHER_UPDATE_AVAILABLE:-0}" == "1" ]]; then
         has_core_update=1
-        printf "  %s⬆  anycli%s  %s(%s commit%s behind)%s\n" \
+        printf "  %s⬆  anycli-launcher%s  %s(%s commit%s behind)%s\n" \
             "$c_warn" "$reset" "$c_dim" \
             "$_AC_LAUNCHER_COMMITS_BEHIND" \
             "$( (( _AC_LAUNCHER_COMMITS_BEHIND > 1 )) && echo "s" || echo "")" \
@@ -3241,7 +3241,7 @@ _ac_do_update() {
 #
 # Records how often and how recently each project was launched, so the menu can
 # float what you actually use to the top and so tooling can see usage.
-_AC_RECENT_FILE="${HOME}/.config/anycli/.recent"
+_AC_RECENT_FILE="${HOME}/.config/anycli-launcher/.recent"
 _AC_RECENT_MAX_ENTRIES=200
 
 # Read one field of a project's history. field is "count" or "ts".
@@ -3754,7 +3754,7 @@ _ac_project_exists_exact() {
 }
 
 _ac_usage() {
-    printf 'anycli %s — launch your AI CLI in a project directory\n\n' "$_AC_VERSION"
+    printf 'anycli-launcher %s — launch your AI CLI in a project directory\n\n' "$_AC_VERSION"
     printf 'Usage:\n'
     printf '  ac                    open the interactive menu\n'
     printf '  ac <name>             launch directly in the matching project\n'
@@ -3801,7 +3801,7 @@ _ac_first_run_wizard() {
     local c_name=$'\e[0;37m' c_dim=$'\e[2m' c_prompt=$'\e[1;32m' c_ok=$'\e[32m'
 
     printf '\n'
-    printf "  %s──  Welcome to anycli  ────────%s\n\n" "$c_title" "$reset"
+    printf "  %s──  Welcome to anycli-launcher  ────────%s\n\n" "$c_title" "$reset"
     printf "  %sNo config yet — let's set it up. Three quick questions.%s\n" "$c_dim" "$reset"
 
     # --- Question 1: projects root -----------------------------------------
@@ -3955,7 +3955,7 @@ _ac_setup() {
     local c_name=$'\e[0;37m' c_dim=$'\e[2m' c_prompt=$'\e[1;32m' c_ok=$'\e[32m'
 
     printf '\n'
-    printf "  %s──  anycli Setup  ────────%s\n\n" "$c_title" "$reset"
+    printf "  %s──  anycli-launcher Setup  ────────%s\n\n" "$c_title" "$reset"
     printf "  %sRevisit the basics. Press Enter to keep the current value.%s\n" "$c_dim" "$reset"
     printf "  %sPer-project settings and preferences are left untouched.%s\n" "$c_dim" "$reset"
 
@@ -4054,7 +4054,7 @@ _ac_doctor() {
     _ac_doctor_warn() { printf '  %s!%s %s%s%s\n' "$warn" "$rst" "$1" "${2:+ — }" "${2:-}"; warns=$((warns+1)); }
     _ac_doctor_fail() { printf '  %s✗%s %s%s%s\n' "$err" "$rst" "$1" "${2:+ — }" "${2:-}"; fails=$((fails+1)); }
 
-    printf '%sanycli doctor%s  (v%s)\n' "$dim" "$rst" "$_AC_VERSION"
+    printf '%sanycli-launcher doctor%s  (v%s)\n' "$dim" "$rst" "$_AC_VERSION"
 
     # --- Launcher configuration ---------------------------------------------
     printf '\n%s── Launcher configuration ──%s\n' "$dim" "$rst"
@@ -4231,7 +4231,7 @@ _ac_render_menu() {
     # Display menu
     printf "\n"
     printf "  %s╭─────────────────────────────────────╮%s\n" "$c_title" "$reset"
-    local _ac_hdr="anycli"
+    local _ac_hdr="anycli-launcher"
     local _ac_ver="v$_AC_VERSION"
     local _ac_pad=$(( 37 - 2 - ${#_ac_hdr} - 2 - ${#_ac_ver} ))
     printf "  %s│%s  %s%*s%s%s%s  %s│%s\n" "$c_title" "$reset" "$_ac_hdr" "$_ac_pad" "" "$c_dim" "$_ac_ver" "$reset" "$c_title" "$reset"
@@ -4428,7 +4428,7 @@ ac() {
 
         case "${1:-}" in
             -h|--help)    _ac_usage; return 0 ;;
-            -V|--version) printf 'anycli %s\n' "$_AC_VERSION"; return 0 ;;
+            -V|--version) printf 'anycli-launcher %s\n' "$_AC_VERSION"; return 0 ;;
             -l|--list)    _ac_list_projects; return 0 ;;
             --)           shift; _ac_launch_by_name "${1:-}" "$_ac_resume"; return $? ;;
             -*)
@@ -4444,7 +4444,7 @@ ac() {
                 fi
                 case "$1" in
                     help)    _ac_usage ;;
-                    version) printf 'anycli %s\n' "$_AC_VERSION" ;;
+                    version) printf 'anycli-launcher %s\n' "$_AC_VERSION" ;;
                     list)    _ac_list_projects ;;
                     config)  _ac_config_menu ;;
                     doctor)  _ac_doctor ;;
@@ -4467,7 +4467,7 @@ ac() {
     # scripts and tests behave), or AC_PROJECTS_DIR is already exported to a
     # valid directory. After the wizard writes the config, the loop below reads
     # it via _ac_load_config and renders the menu in the same invocation.
-    local _ac_legacy_config="${HOME}/.config/anycli/config"
+    local _ac_legacy_config="${HOME}/.config/anycli-launcher/config"
     if [[ ! -f "$_AC_CONFIG_FILE" && ! -f "$_ac_legacy_config" && -t 0 ]] \
         && [[ -z "${AC_PROJECTS_DIR:-}" || ! -d "${AC_PROJECTS_DIR:-}" ]]; then
         _ac_first_run_wizard || return 1
@@ -4497,7 +4497,7 @@ ac() {
 
         if [[ ! -d "$_AC_PROJECTS_DIR" ]]; then
             echo "Error: Projects directory not found: $_AC_PROJECTS_DIR"
-            echo "Set AC_PROJECTS_DIR or configure ~/.config/anycli/config.yaml"
+            echo "Set AC_PROJECTS_DIR or configure ~/.config/anycli-launcher/config.yaml"
             return 1
         fi
 

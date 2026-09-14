@@ -428,7 +428,13 @@ _ac_spin_verbose() {
     _ac_spin_run 1 "$@"
 }
 
-_AC_CONFIG_FILE="${HOME}/.config/anycli-launcher/config.yaml"
+# Idempotent (like _AC_MENU_TIMEOUT below): re-sourcing this file must never
+# clobber a path a caller deliberately set beforehand -- an unconditional
+# assignment here bit us once already (an exploratory `_AC_CONFIG_FILE=...;
+# source anycli-launcher.bash` silently reset it back to the real path,
+# and a subsequent _ac_write_config call landed on a live config instead of
+# the intended throwaway one).
+_AC_CONFIG_FILE="${_AC_CONFIG_FILE:-${HOME}/.config/anycli-launcher/config.yaml}"
 
 # Seconds the menu waits for input before giving up.
 _AC_MENU_TIMEOUT="${_AC_MENU_TIMEOUT:-300}"
@@ -498,6 +504,10 @@ _ac_load_config() {
     # one AI CLI singled out over the others in _AC_CLIS.
     _AC_CLI_TOOL=""
     _AC_CLI_LAUNCH=""
+    # Override for the current CLI's config folder ("~" unexpanded). Empty
+    # means "use the hardcoded default from _AC_CLIS for the current tool" --
+    # see _ac_resolved_config_dir.
+    _AC_CLI_CONFIG_DIR=""
     _AC_AUTO_UPDATE_CHECK="true"
     _AC_THEME="Default"
     _AC_SORT_ORDER="name"
@@ -608,6 +618,7 @@ _ac_parse_yaml() {
                 default_flags) _AC_CLI_FLAGS="$value" ;;
                 cli_tool)      _AC_CLI_TOOL="$value" ;;
                 cli_launch)    _AC_CLI_LAUNCH="$value" ;;
+                cli_config_dir) _AC_CLI_CONFIG_DIR="$value" ;;
                 auto_update_check) _AC_AUTO_UPDATE_CHECK="$value" ;;
                 theme)         _AC_THEME="$value" ;;
                 sort_order)    _AC_SORT_ORDER="$value" ;;
@@ -984,6 +995,7 @@ _ac_write_config() {
         echo "default_flags: $(_ac_yaml_quote "$_AC_CLI_FLAGS")"
         echo "cli_tool: $(_ac_yaml_quote "$_AC_CLI_TOOL")"
         echo "cli_launch: $(_ac_yaml_quote "$_AC_CLI_LAUNCH")"
+        echo "cli_config_dir: $(_ac_yaml_quote "$(_ac_tildify "$_AC_CLI_CONFIG_DIR")")"
         echo "auto_update_check: $(_ac_yaml_quote "$_AC_AUTO_UPDATE_CHECK")"
         echo "theme: $(_ac_yaml_quote "$_AC_THEME")"
         echo "sort_order: $(_ac_yaml_quote "$_AC_SORT_ORDER")"
@@ -1059,11 +1071,15 @@ _ac_write_config() {
 # other silently lost either its default launch subcommand or its resume
 # capabilities.
 #
-# Format: tool|default-subcmd|resume-flag|list-sessions-argv|picker-flag
+# Format: tool|default-subcmd|resume-flag|list-sessions-argv|picker-flag|config-dir
 #   - default-subcmd: launch subcommand offered by the setup wizard (empty = none)
 #   - resume-flag: flag to resume the most recent conversation (empty = none)
 #   - list-sessions-argv: space-separated argv to list sessions as JSON (empty = none)
 #   - picker-flag: flag to interactively pick a session to resume (empty = none)
+#   - config-dir: the tool's per-user config/settings folder, "~" left
+#     unexpanded (empty = unknown; the menu's "config" shortcut and the
+#     config-folder setting stay hidden until someone adds one, or the user
+#     overrides it themselves via `c` -> Config folder)
 # Empty capability fields mean the tool lacks that capability; the launcher
 # never emits an unsupported flag and hides the corresponding trigger.
 #
@@ -1072,17 +1088,17 @@ _ac_write_config() {
 # list-sessions command and picker flag are unknown, so session-aware menu
 # entries and the picker are disabled for claude until verified.
 _AC_CLIS=(
-    "kiro-cli|chat|--resume|chat --list-sessions --format json|--resume-picker"
-    "claude||--continue||"
+    "kiro-cli|chat|--resume|chat --list-sessions --format json|--resume-picker|~/.kiro"
+    "claude||--continue|||~/.claude"
     "aider||||"
     "goose|session|--resume||"
     "codex||||"
     "amp||||"
 )
 
-# Split a tool's row into fields. Sets _AC_CLI_FIELDS (indexed 0..4):
-# 0=tool 1=subcmd 2=resume-flag 3=list-argv 4=picker-flag. Returns 1 if the
-# tool isn't in the table.
+# Split a tool's row into fields. Sets _AC_CLI_FIELDS (indexed 0..5):
+# 0=tool 1=subcmd 2=resume-flag 3=list-argv 4=picker-flag 5=config-dir.
+# Returns 1 if the tool isn't in the table.
 _ac_cli_fields() {
     local tool="${1:-}" entry
     _AC_CLI_FIELDS=()
@@ -1121,6 +1137,29 @@ _ac_cli_picker_flag() {
     _ac_cli_fields "${1:-}" || return 0
     printf '%s' "${_AC_CLI_FIELDS[4]:-}"
     return 0
+}
+
+# Print the hardcoded config-folder default for a tool ("~" left
+# unexpanded), or nothing if no folder is known for it.
+_ac_cli_config_dir() {
+    _ac_cli_fields "${1:-}" || return 0
+    printf '%s' "${_AC_CLI_FIELDS[5]:-}"
+    return 0
+}
+
+# Resolve the config folder to use for the currently configured CLI: an
+# explicit _AC_CLI_CONFIG_DIR override (set via the config menu) wins, else
+# fall back to the tool's hardcoded default from _AC_CLIS. Expands a leading
+# "~" either way. Prints nothing when neither is known -- callers hide the
+# "config" shortcut in that case.
+_ac_resolved_config_dir() {
+    if [[ -n "$_AC_CLI_CONFIG_DIR" ]]; then
+        _ac_normalize_typed_path "$_AC_CLI_CONFIG_DIR"
+    else
+        local default_dir
+        default_dir="$(_ac_cli_config_dir "$_AC_CLI_TOOL")"
+        [[ -n "$default_dir" ]] && _ac_normalize_typed_path "$default_dir"
+    fi
 }
 
 _ac_detect_clis() {
@@ -1370,7 +1409,9 @@ _ac_config_toggle_git_status() {
 }
 
 # --- Theme System ---
-_AC_THEME_FILE="${HOME}/.config/anycli-launcher/theme.bash"
+# Idempotent, like _AC_CONFIG_FILE above -- re-sourcing must not clobber a
+# path a caller (a test, an isolated shell) deliberately set beforehand.
+_AC_THEME_FILE="${_AC_THEME_FILE:-${HOME}/.config/anycli-launcher/theme.bash}"
 
 # Theme definitions: name|bg|fg|cursor|black|red|green|yellow|blue|purple|cyan|white|br_black|br_red|br_green|br_yellow|br_blue|br_purple|br_cyan|br_white|ps1_style
 # PS1 styles: minimal, arrow, powerline, lambda
@@ -1560,7 +1601,7 @@ def profile_key(profile, index):
 
 # Where the pre-theme colorScheme of each profile is recorded so that resetting
 # restores what the user had rather than deleting the field outright.
-_AC_WT_SCHEME_BACKUP="${HOME}/.config/anycli-launcher/wt-schemes.json"
+_AC_WT_SCHEME_BACKUP="${_AC_WT_SCHEME_BACKUP:-${HOME}/.config/anycli-launcher/wt-schemes.json}"
 
 # Detect the two prerequisites every Windows Terminal settings.json mutation
 # needs: the settings file itself, and a working Python interpreter to edit
@@ -2190,6 +2231,7 @@ _ac_config_menu() {
         local c_name=$'\e[0;37m'
         local c_prompt=$'\e[1;32m'
         local c_val=$'\e[0;35m'
+        local c_dim=$'\e[2m'
 
         printf '\n'
         printf "  %s──  anycli-launcher Config  ────────%s\n\n" "$c_title" "$reset"
@@ -2205,6 +2247,15 @@ _ac_config_menu() {
         fi
 
         printf "  %s 4%s  %sCLI tool%s             %s%s %s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH" "$reset"
+        local _cfg_dir_resolved
+        _cfg_dir_resolved="$(_ac_resolved_config_dir)"
+        if [[ -n "$_AC_CLI_CONFIG_DIR" ]]; then
+            printf "  %s f%s  %sConfig folder%s        %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_cfg_dir_resolved" "$reset"
+        elif [[ -n "$_cfg_dir_resolved" ]]; then
+            printf "  %s f%s  %sConfig folder%s        %s%s%s %s(default)%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_cfg_dir_resolved" "$reset" "$c_dim" "$reset"
+        else
+            printf "  %s f%s  %sConfig folder%s        %s(none known for %s)%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_AC_CLI_TOOL" "$reset"
+        fi
         printf "  %s 5%s  %sAuto-update check%s    %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "$_AC_AUTO_UPDATE_CHECK" "$reset"
         printf "  %s 6%s  %sTheme%s                %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${_AC_THEME:-Default}" "$reset"
         printf "  %s 7%s  %sPer-project aliases%s\n" "$c_num" "$reset" "$c_name" "$reset"
@@ -2249,6 +2300,7 @@ _ac_config_menu() {
             2) _ac_config_edit_default_flags ;;
             3) _ac_config_edit_project_flags ;;
             4) _ac_config_edit_cli_tool ;;
+            f|F) _ac_config_edit_config_dir ;;
             5) _ac_config_toggle_update_check ;;
             6) _ac_config_theme ;;
             7) _ac_config_edit_project_aliases ;;
@@ -2275,6 +2327,40 @@ _ac_normalize_typed_path() {
         p="$(cygpath -u "$p" 2>/dev/null || printf '%s' "$p")"
     fi
     printf '%s' "$p"
+}
+
+_ac_config_edit_config_dir() {
+    local default_dir
+    default_dir="$(_ac_cli_config_dir "$_AC_CLI_TOOL")"
+    printf "\n  Current: %s\n" "$(_ac_resolved_config_dir)"
+    if [[ -n "$_AC_CLI_CONFIG_DIR" && -n "$default_dir" ]]; then
+        printf "  (%s's default is %s)\n" "$_AC_CLI_TOOL" "$default_dir"
+    fi
+    printf "  New value (blank to keep%s): " "$([[ -n "$_AC_CLI_CONFIG_DIR" ]] && printf ', "d" to reset to default')"
+    local val
+    read -r val
+    if [[ "$val" == "d" || "$val" == "D" ]]; then
+        _AC_CLI_CONFIG_DIR=""
+        _ac_write_config
+        printf "  ✓ Reset to default\n"
+    elif [[ -n "$val" ]]; then
+        val="$(_ac_normalize_typed_path "$val")"
+        if [[ ! -d "$val" ]]; then
+            printf "  Warning: directory does not exist: %s\n" "$val"
+            printf "  Save anyway? (y/n): "
+            local confirm
+            read -r confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                printf "  ✗ Not saved\n"
+                return
+            fi
+        fi
+        _AC_CLI_CONFIG_DIR="$val"
+        _ac_write_config
+        printf "  ✓ Saved\n"
+    else
+        printf "  — No changes\n"
+    fi
 }
 
 _ac_config_edit_projects_dir() {
@@ -2676,8 +2762,9 @@ _ac_timeout() {
 }
 
 # --- Update Detection ---
-_AC_UPDATE_CACHE="${HOME}/.config/anycli-launcher/.update-check"
-_AC_UPDATE_CHECK_INTERVAL=14400  # 4 hours in seconds
+# Idempotent, like _AC_CONFIG_FILE above.
+_AC_UPDATE_CACHE="${_AC_UPDATE_CACHE:-${HOME}/.config/anycli-launcher/.update-check}"
+_AC_UPDATE_CHECK_INTERVAL="${_AC_UPDATE_CHECK_INTERVAL:-14400}"  # 4 hours in seconds
 _AC_CLI_RELEASE_INDEX="https://desktop-release.q.us-east-1.amazonaws.com/index.json"
 
 # Tracked apps are user-defined in config.yaml under "tracked_apps". The list
@@ -3241,8 +3328,8 @@ _ac_do_update() {
 #
 # Records how often and how recently each project was launched, so the menu can
 # float what you actually use to the top and so tooling can see usage.
-_AC_RECENT_FILE="${HOME}/.config/anycli-launcher/.recent"
-_AC_RECENT_MAX_ENTRIES=200
+_AC_RECENT_FILE="${_AC_RECENT_FILE:-${HOME}/.config/anycli-launcher/.recent}"
+_AC_RECENT_MAX_ENTRIES="${_AC_RECENT_MAX_ENTRIES:-200}"
 
 # Read one field of a project's history. field is "count" or "ts".
 _ac_recent_field() {
@@ -4290,6 +4377,24 @@ _ac_render_menu() {
     printf "   %s%2d%s  %s● %s (root)%s\n" "$c_num" "$index" "$reset" "$c_accent" "${_root_base##*/}" "$reset"
     ((index++))
 
+    # Entry 3 (only when this CLI has a known config folder): cd + launch,
+    # same shape as "root" above. _ac_config_dir_resolved is set by the
+    # caller (ac()) before it invokes this function. Many config folders
+    # (~/.claude, ~/.kiro, dotfiles-managed or not) are themselves git repos
+    # people track, so it gets the same git-status suffix as a project entry
+    # -- otherwise edits sitting there uncommitted are easy to forget about.
+    if [[ -n "${_ac_config_dir_resolved:-}" ]]; then
+        local _cfg_base="${_ac_config_dir_resolved%/}"
+        local _cfg_git_suffix=""
+        if [[ "${_AC_SHOW_GIT_STATUS:-false}" == "true" ]]; then
+            local _cfg_git_info
+            _cfg_git_info="$(_ac_git_summary "$_ac_config_dir_resolved")"
+            [[ -n "$_cfg_git_info" ]] && _cfg_git_suffix="$(printf "  %s%s%s" "$c_dim" "$_cfg_git_info" "$reset")"
+        fi
+        printf "   %s%2d%s  %s● %s (config)%s%s\n" "$c_num" "$index" "$reset" "$c_accent" "${_cfg_base##*/}" "$reset" "$_cfg_git_suffix"
+        ((index++))
+    fi
+
     if [[ -n "$_ac_filter" ]]; then
         printf "   %s%s%s  %sfilter: %s%s  %s(/ to clear)%s\n" \
             "$c_dim" "──" "$reset" "$c_accent" "$_ac_filter" "$reset" "$c_dim" "$reset"
@@ -4537,6 +4642,21 @@ ac() {
         # timeout message below still needs them after the render call
         # returns and its own copies of these have gone out of scope.
         local reset=$'\e[0m' c_dim=$'\e[2m'
+        # Config folder shows up as entry 3 only when one is known for the
+        # current CLI (hardcoded default or a config-menu override), pushing
+        # projects to start one slot later. _ac_proj_offset is how many
+        # header entries (terminal/root[/config]) come before entry 1 in
+        # "dirs", used below and by the resume/picker key handlers instead of
+        # a hardcoded 3.
+        local _ac_config_dir_resolved
+        _ac_config_dir_resolved="$(_ac_resolved_config_dir)"
+        # Only offer the shortcut for a folder that actually exists -- a
+        # hardcoded/overridden path for a CLI that was never run here (or
+        # whose config lives elsewhere on this machine) would otherwise be a
+        # dead entry.
+        [[ -n "$_ac_config_dir_resolved" && -d "$_ac_config_dir_resolved" ]] || _ac_config_dir_resolved=""
+        local _ac_proj_offset=3
+        [[ -n "$_ac_config_dir_resolved" ]] && _ac_proj_offset=4
         _ac_render_menu
 
         # Read input, with an idle timeout
@@ -4593,12 +4713,12 @@ ac() {
         fi
 
         # Resume launch: "r<N>" launches project N, continuing its most recent
-        # session (only meaningful for projects, i.e. index >= 3). Advertised in
-        # the legend when the configured CLI supports resume.
+        # session (only meaningful for projects, i.e. index >= _ac_proj_offset).
+        # Advertised in the legend when the configured CLI supports resume.
         if [[ "$key" =~ ^[rR]([0-9]+)$ ]]; then
             local rkey="${BASH_REMATCH[1]}"
-            if (( rkey >= 3 && rkey < index )); then
-                local rselected="${dirs[$((rkey - 3))]}"
+            if (( rkey >= _ac_proj_offset && rkey < index )); then
+                local rselected="${dirs[$((rkey - _ac_proj_offset))]}"
                 _ac_launch_project "$rselected" "1"
                 if [[ -z "${_AC_LAUNCHED_NEW_TAB:-}" ]]; then
                     return
@@ -4613,8 +4733,8 @@ ac() {
         # interactive session picker. Advertised only when the CLI supports it.
         if [[ "$key" =~ ^[pP]([0-9]+)$ ]]; then
             local pkey="${BASH_REMATCH[1]}"
-            if (( pkey >= 3 && pkey < index )); then
-                local pselected="${dirs[$((pkey - 3))]}"
+            if (( pkey >= _ac_proj_offset && pkey < index )); then
+                local pselected="${dirs[$((pkey - _ac_proj_offset))]}"
                 _ac_launch_project "$pselected" "picker"
                 if [[ -z "${_AC_LAUNCHED_NEW_TAB:-}" ]]; then
                     return
@@ -4647,8 +4767,15 @@ ac() {
             flags=$(_ac_get_flags "${_root_base##*/}")
             _ac_run_cli "$flags"
             return
+        elif (( _ac_proj_offset == 4 && key == 3 )); then
+            cd "$_ac_config_dir_resolved" || return 1
+            local flags
+            local _cfg_base="${_ac_config_dir_resolved%/}"
+            flags=$(_ac_get_flags "${_cfg_base##*/}")
+            _ac_run_cli "$flags"
+            return
         else
-            local selected="${dirs[$((key - 3))]}"
+            local selected="${dirs[$((key - _ac_proj_offset))]}"
             _ac_launch_project "$selected"
             # If launched in a new tab, keep menu open; otherwise we already cd'd
             if [[ -z "${_AC_LAUNCHED_NEW_TAB:-}" ]]; then

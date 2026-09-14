@@ -5922,6 +5922,158 @@ assert_eq "migrate: current key wins over legacy (no overwrite)" "#00ff00" \
 _AC_CONFIG_FILE="$_mig_cfg_saved"
 rm -rf "$_MIG_HOME"
 
+# ═══════════════════════════════════════
+echo "── CLI config folder ──"
+# Each CLI can carry a hardcoded config-folder default (claude -> ~/.claude,
+# kiro-cli -> ~/.kiro); the config menu lets a user override it, and the main
+# menu offers a "config" shortcut (entry 3, cd + launch like "root") only
+# when the resolved folder actually exists on disk.
+
+assert_eq "cfgdir: claude's hardcoded default is ~/.claude" "~/.claude" "$(_ac_cli_config_dir "claude")"
+assert_eq "cfgdir: kiro-cli's hardcoded default is ~/.kiro" "~/.kiro" "$(_ac_cli_config_dir "kiro-cli")"
+assert_eq "cfgdir: aider has no known default" "" "$(_ac_cli_config_dir "aider")"
+
+CFG_HOME=$(mktemp -d)
+mkdir -p "$CFG_HOME/.claude"
+_AC_CLI_TOOL="claude"
+_AC_CLI_CONFIG_DIR=""
+assert_eq "cfgdir: resolves to the tool default, tilde expanded" "$CFG_HOME/.claude" \
+    "$(HOME="$CFG_HOME" _ac_resolved_config_dir)"
+
+_AC_CLI_CONFIG_DIR="~/custom-dir"
+assert_eq "cfgdir: an explicit override wins over the default" "$CFG_HOME/custom-dir" \
+    "$(HOME="$CFG_HOME" _ac_resolved_config_dir)"
+
+_AC_CLI_CONFIG_DIR=""
+_AC_CLI_TOOL="aider"
+assert_eq "cfgdir: no default and no override resolves empty" "" \
+    "$(HOME="$CFG_HOME" _ac_resolved_config_dir)"
+
+# Round-trips through write/load like cli_tool and cli_launch.
+CFGDIR_CONFIG=$(mktemp)
+_AC_CONFIG_FILE="$CFGDIR_CONFIG"
+export AC_PROJECTS_DIR="$FIXTURES/projects"
+_AC_CLI_TOOL="claude"
+_AC_CLI_CONFIG_DIR="~/custom-dir"
+_ac_write_config
+cfgdir_written="$(cat "$CFGDIR_CONFIG")"
+assert_contains "cfgdir: written to config" 'cli_config_dir: "~/custom-dir"' "$cfgdir_written"
+_AC_CLI_CONFIG_DIR=""
+_ac_load_config
+assert_eq "cfgdir: override reloaded from config" "$HOME/custom-dir" "$_AC_CLI_CONFIG_DIR"
+
+# Menu: shortcut is hidden when the resolved folder doesn't exist...
+_AC_CLI_CONFIG_DIR="$CFG_HOME/does-not-exist"
+_ac_write_config
+_ac_load_config
+menu_nocfg=$(echo "q" | ac 2>/dev/null || true)
+if [[ "$menu_nocfg" == *"(config)"* ]]; then
+    printf '  \e[31m✗\e[0m cfgdir: menu hides config shortcut for a missing folder\n'; ((FAIL++))
+else
+    printf '  \e[32m✓\e[0m cfgdir: menu hides config shortcut for a missing folder\n'; ((PASS++))
+fi
+
+# ...and shown, as entry 3, when it does.
+CFGDIR_REPO="$CFG_HOME/.claude"
+_AC_CLI_CONFIG_DIR="$CFGDIR_REPO"
+_ac_write_config
+_ac_load_config
+menu_withcfg=$(echo "q" | ac 2>/dev/null || true)
+assert_contains "cfgdir: menu shows config shortcut when the folder exists" "(config)" "$menu_withcfg"
+menu_withcfg_plain="$(echo "$menu_withcfg" | sed 's/\x1b\[[0-9;]*m//g')"
+assert_contains "cfgdir: config shortcut is entry 3" $'3  \xe2\x97\x8f .claude (config)' "$menu_withcfg_plain"
+assert_contains "cfgdir: projects now start at entry 4" $'4  alpha' "$menu_withcfg_plain"
+
+# Selecting entry 3 cd's into the config folder and launches the CLI there
+# (same shape as "root"), using kiro-cli (mocked) so the launch is observable.
+_AC_CLI_TOOL="kiro-cli"
+_AC_CLI_LAUNCH="chat"
+_AC_CLI_FLAGS="--trust-all-tools"
+_ac_write_config
+_ac_load_config
+rm -f "$LK_TEST_LOG"
+(echo "3" | ac) >/dev/null 2>&1 || true
+if [[ -f "$LK_TEST_LOG" ]]; then
+    cfg_launch_call="$(cat "$LK_TEST_LOG")"
+    assert_contains "cfgdir: entry 3 launches the configured CLI" "KIRO_CALLED:" "$cfg_launch_call"
+    assert_contains "cfgdir: entry 3 carries default flags" "--trust-all-tools" "$cfg_launch_call"
+else
+    printf '  \e[31m✗\e[0m cfgdir: entry 3 should launch the CLI\n'; ((FAIL++))
+fi
+
+# git-status suffix: shown when show_git_status is on and the folder is a repo.
+git -C "$CFGDIR_REPO" init -q 2>/dev/null
+git -C "$CFGDIR_REPO" config user.email "test@example.com"
+git -C "$CFGDIR_REPO" config user.name "Test"
+echo one > "$CFGDIR_REPO/file.txt"
+git -C "$CFGDIR_REPO" add -A 2>/dev/null
+git -C "$CFGDIR_REPO" commit -qm init 2>/dev/null
+touch "$CFGDIR_REPO/dirty-file"
+_AC_SHOW_GIT_STATUS="true"
+_ac_write_config
+_ac_load_config
+menu_cfg_git=$(echo "q" | ac 2>/dev/null || true)
+menu_cfg_git_plain="$(echo "$menu_cfg_git" | sed 's/\x1b\[[0-9;]*m//g')"
+assert_contains "cfgdir: git branch shown on the config entry" "(config)" "$menu_cfg_git_plain"
+if echo "$menu_cfg_git_plain" | grep -qE '\(config\)\s+\S+\*?'; then
+    printf '  \e[32m✓\e[0m cfgdir: config entry carries a git-status suffix\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m cfgdir: config entry should carry a git-status suffix\n    actual: %s\n' "$menu_cfg_git_plain"; ((FAIL++))
+fi
+_AC_SHOW_GIT_STATUS="false"
+
+# Config menu: "Config folder" row and edit action.
+config_menu_out=$(echo "b" | _ac_config_menu 2>/dev/null || true)
+assert_contains "cfgdir: config menu shows Config folder row" "Config folder" "$config_menu_out"
+
+printf 'f\nd\nb\n' | _ac_config_menu >/dev/null 2>&1
+_ac_load_config
+assert_eq "cfgdir: 'd' resets the override to default" "" "$_AC_CLI_CONFIG_DIR"
+
+unset AC_PROJECTS_DIR
+rm -rf "$CFG_HOME" "$CFGDIR_CONFIG"
+_AC_CLI_FLAGS=""
+_AC_CLI_CONFIG_DIR=""
+
+# ═══════════════════════════════════════
+echo "── Regression: re-sourcing must not clobber a pre-set data-file path ──"
+# Bug: the top-level `_AC_CONFIG_FILE="${HOME}/.../config.yaml"` assignment
+# used to run unconditionally, so `_AC_CONFIG_FILE=<throwaway path>; source
+# anycli-launcher.bash` silently reset it back to the real per-user path. A
+# subsequent _ac_write_config in that shell then landed on the user's live
+# config (once actually overwriting a real projects_dir with a test fixtures
+# path). Every "where does this persistent file live" assignment at the top
+# of the script must be idempotent (`"${VAR:-default}"`, like
+# _AC_MENU_TIMEOUT already was) so re-sourcing can never do this again --
+# checked here across all of them at once so a new one added later without
+# the guard gets caught too.
+RESRC_REAL_HOME="$(mktemp -d)"
+RESRC_TMP="$(mktemp -d)"
+for _resrc_var in _AC_CONFIG_FILE _AC_THEME_FILE _AC_WT_SCHEME_BACKUP \
+                  _AC_UPDATE_CACHE _AC_RECENT_FILE; do
+    _resrc_throwaway="$RESRC_TMP/${_resrc_var}.throwaway"
+    _resrc_got="$(
+        env HOME="$RESRC_REAL_HOME" "${_resrc_var}=${_resrc_throwaway}" \
+            bash -c 'source "'"$PROJECT_DIR"'/anycli-launcher.bash"; printf "%s" "${!1}"' _ "$_resrc_var" \
+            2>/dev/null
+    )"
+    assert_eq "resource: pre-set \$${_resrc_var} survives sourcing" "$_resrc_throwaway" "$_resrc_got"
+done
+assert_eq "resource: no real per-user files were created along the way" \
+    "0" "$([[ -e "$RESRC_REAL_HOME/.config" ]] && echo 1 || echo 0)"
+rm -rf "$RESRC_REAL_HOME" "$RESRC_TMP"
+
+# Same guard for the two numeric constants in that family (interval/limit
+# knobs a test might legitimately want to shrink without a real re-source).
+for _resrc_num_var in _AC_UPDATE_CHECK_INTERVAL _AC_RECENT_MAX_ENTRIES; do
+    _resrc_got="$(
+        env "${_resrc_num_var}=1" \
+            bash -c 'source "'"$PROJECT_DIR"'/anycli-launcher.bash"; printf "%s" "${!1}"' _ "$_resrc_num_var" \
+            2>/dev/null
+    )"
+    assert_eq "resource: pre-set \$${_resrc_num_var} survives sourcing" "1" "$_resrc_got"
+done
+
 # === NEW TESTS GO ABOVE THIS LINE ===
 # ═══════════════════════════════════════
 # Cleanup

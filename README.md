@@ -232,6 +232,7 @@ Press `c` from the main menu to configure:
 2. **Default flags** — flags passed to every AI CLI invocation
 3. **Per-project flags** — override flags for specific projects
 4. **CLI tool** — which AI CLI to use (auto-detects available tools)
+- **f — Config folder** — the current CLI's config/settings folder (hardcoded per tool, e.g. `~/.claude` for `claude`, `~/.kiro` for `kiro-cli`; empty for tools with no known default). Type a path to override it, or `d` to reset to the default. When the resolved folder exists on disk, the main menu shows it as a "config" shortcut (cd + launch, same as "root"), with a git-status suffix if it's a repo you track.
 9. **Show last session** — when your CLI can list saved sessions (kiro-cli), display each project's most recent session title and age in the menu (e.g. `⏵ "fix the alias bug" · 2h`). Off by default; when off, the launcher makes no session lookups. Uses `jq` when available and falls back to a best-effort parser otherwise.
 - **s — Sort order** — how the project list is ordered: `name` (alphabetical, the default) or `recent` (most-recently-launched projects float to the top). Recency uses each project's last-launch time; projects never launched keep alphabetical order at the end.
 - **g — Show git status** — show a per-project git summary on each menu row (current branch, a `*` when the tree is dirty, `↑`/`↓` ahead/behind counts). Off by default. When on it shells out to git per project on every render; non-git directories render cleanly with no summary and no error.

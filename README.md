@@ -10,7 +10,7 @@ If you keep all your coding projects in one folder and use AI CLI tools as your 
 
 ```
   ╭─────────────────────────────────────╮
-  │  anycli-launcher            v3.1.0  │
+  │  anycli-launcher            v3.2.0  │
   ╰─────────────────────────────────────╯
 
    1  ● terminal
@@ -19,7 +19,7 @@ If you keep all your coding projects in one folder and use AI CLI tools as your 
    4  dotfiles
    5  scripts
 
-   c  config    q  quit
+   c  config    n  new    q  quit
 
   ›
 ```
@@ -146,7 +146,7 @@ cd ~/projects/anycli-launcher
 git pull
 ```
 
-Then open a new terminal (or run `source ~/.bashrc`) and run `ac`. Verify the header shows `v3.1.0`.
+Then open a new terminal (or run `source ~/.bashrc`) and run `ac`. Verify the header shows `v3.2.0`.
 
 ## Configuration
 
@@ -249,6 +249,7 @@ Press `c` from the main menu to configure:
 | c | Open configuration menu |
 | u | Update kiro-cli (if that's your configured CLI) and/or the launcher itself (shown when updates available) |
 | v | Show changelog |
+| n | Create a new project folder in the projects root (`mkdir` + `git init`), then optionally set its alias/color/title/prompt |
 | ? | Show key help (lists the r&lt;N&gt;/p&lt;N&gt; session triggers when supported) |
 | q | Quit |
 

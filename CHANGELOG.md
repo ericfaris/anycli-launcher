@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.2.0
+
+### Added
+- **New project from the menu.** Press `n` on the main menu to create a
+  project folder under your projects root, `git init` it, and optionally set
+  its alias, tab color, tab title and initial prompt right away. The folder is
+  always created directly in `projects_dir` (extra dirs are never targets), and
+  a missing or failing `git` leaves the folder in place rather than aborting.
+
 ## 3.1.0
 
 Renamed the project from anycli to **anycli-launcher**. Breaking change —

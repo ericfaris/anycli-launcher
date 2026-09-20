@@ -6074,6 +6074,133 @@ for _resrc_num_var in _AC_UPDATE_CHECK_INTERVAL _AC_RECENT_MAX_ENTRIES; do
     assert_eq "resource: pre-set \$${_resrc_num_var} survives sourcing" "1" "$_resrc_got"
 done
 
+# ═══════════════════════════════════════
+echo "── New Project (n) ──"
+
+strip_ansi() { sed 's/\x1b\[[0-9;]*m//g'; }
+
+NEWP_DIR=$(mktemp -d)
+NEWP_CONFIG=$(mktemp)
+_AC_CONFIG_FILE="$NEWP_CONFIG"
+export AC_PROJECTS_DIR="$NEWP_DIR"
+_AC_CLI_FLAGS=""; _AC_CLI_TOOL="kiro-cli"; _AC_CLI_LAUNCH="chat"
+_AC_AUTO_UPDATE_CHECK="false"
+for v in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do unset "$v"; done
+for v in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_); do unset "$v"; done
+for v in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_); do unset "$v"; done
+for v in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do unset "$v"; done
+_ac_write_config
+_ac_load_config
+
+# 7a. Validator unit tests
+mkdir -p "$NEWP_DIR/taken"
+
+newp_out=$(_ac_validate_new_project_name "good-name_1.x"); newp_rc=$?
+assert_exit "new-project: valid name accepted" "0" "$newp_rc"
+assert_eq "new-project: valid name produces no message" "" "$newp_out"
+
+newp_out=$(_ac_validate_new_project_name ""); newp_rc=$?
+assert_exit "new-project: empty name rejected" "1" "$newp_rc"
+
+newp_out=$(_ac_validate_new_project_name "a/b"); newp_rc=$?
+assert_exit "new-project: slash rejected (exit)" "1" "$newp_rc"
+assert_contains "new-project: slash rejected (message)" "path separator" "$newp_out"
+
+newp_out=$(_ac_validate_new_project_name 'a\b'); newp_rc=$?
+assert_exit "new-project: backslash rejected" "1" "$newp_rc"
+
+newp_out=$(_ac_validate_new_project_name "has space"); newp_rc=$?
+assert_exit "new-project: space rejected" "1" "$newp_rc"
+
+newp_out=$(_ac_validate_new_project_name "-lead"); newp_rc=$?
+assert_exit "new-project: leading dash rejected" "1" "$newp_rc"
+
+newp_out=$(_ac_validate_new_project_name ".."); newp_rc=$?
+assert_exit "new-project: '..' rejected" "1" "$newp_rc"
+
+newp_out=$(_ac_validate_new_project_name "taken"); newp_rc=$?
+assert_exit "new-project: existing name rejected (exit)" "1" "$newp_rc"
+assert_contains "new-project: existing name rejected (message)" "already exists" "$newp_out"
+
+# 7b. Happy path through the menu
+printf 'n\nbrandnew\nn\nq\n' | ac >/dev/null 2>&1 || true
+
+if [[ -d "$NEWP_DIR/brandnew" ]]; then printf '  \e[32m✓\e[0m new-project: directory created\n'; ((PASS++)); else printf '  \e[31m✗\e[0m new-project: directory created\n'; ((FAIL++)); fi
+if [[ -d "$NEWP_DIR/brandnew/.git" ]]; then printf '  \e[32m✓\e[0m new-project: git repo initialized\n'; ((PASS++)); else printf '  \e[31m✗\e[0m new-project: git repo initialized\n'; ((FAIL++)); fi
+
+menu_out=$(echo q | ac 2>/dev/null | strip_ansi)
+assert_contains "new-project: appears in menu" "brandnew" "$menu_out"
+
+# 7c. Skipping the config step writes nothing
+newp_cfg="$(cat "$NEWP_CONFIG")"
+if [[ "$newp_cfg" != *"brandnew"* ]]; then
+    printf '  \e[32m✓\e[0m new-project: skipping setup writes no config entry\n'; ((PASS++))
+else
+    printf '  \e[31m✗\e[0m new-project: skipping setup writes no config entry\n'; ((FAIL++))
+fi
+
+# 7d. Inline config persists all four fields
+printf 'n\nstyled\ny\n1\nMy Styled\n2\n#00cc66\n3\nStyled Tab\n4\nhello there\nd\nq\n' | ac >/dev/null 2>&1 || true
+
+newp_cfg="$(cat "$NEWP_CONFIG")"
+assert_contains "new-project: alias written to config" "My Styled" "$newp_cfg"
+assert_contains "new-project: color written to config" "#00cc66" "$newp_cfg"
+assert_contains "new-project: title written to config" "Styled Tab" "$newp_cfg"
+assert_contains "new-project: prompt written to config" "hello there" "$newp_cfg"
+
+_ac_load_config
+assert_eq "new-project: alias round-trips in memory" "My Styled" "$(_ac_indirect "_AC_PROJECT_ALIAS_styled")"
+assert_eq "new-project: color round-trips in memory" "#00cc66" "$(_ac_indirect "_AC_PROJECT_COLOR_styled")"
+assert_eq "new-project: title round-trips in memory" "Styled Tab" "$(_ac_indirect "_AC_PROJECT_TITLE_styled")"
+assert_eq "new-project: prompt round-trips in memory" "hello there" "$(_ac_indirect "_AC_PROJECT_PROMPT_styled")"
+
+menu_out=$(echo q | ac 2>/dev/null | strip_ansi)
+assert_contains "new-project: menu shows alias" "My Styled" "$menu_out"
+
+# 7e. Duplicate name rejected through the menu
+dup_raw=$(printf 'n\nstyled\n\nq\n' | ac 2>/dev/null); dup_rc=$?
+dup_out=$(strip_ansi <<< "$dup_raw")
+assert_contains "new-project: duplicate rejected" "already exists" "$dup_out"
+if [[ -d "$NEWP_DIR/styled/.git" ]]; then printf '  \e[32m✓\e[0m new-project: duplicate does not clobber existing repo\n'; ((PASS++)); else printf '  \e[31m✗\e[0m new-project: duplicate does not clobber existing repo\n'; ((FAIL++)); fi
+assert_exit "new-project: duplicate flow leaves ac exiting normally" "0" "$dup_rc"
+
+# 7f. Invalid name, then retry succeeds
+printf 'n\nbad name\nrecovered\nn\nq\n' | ac >/dev/null 2>&1 || true
+if [[ -d "$NEWP_DIR/recovered" ]]; then printf '  \e[32m✓\e[0m new-project: retry after invalid name succeeds\n'; ((PASS++)); else printf '  \e[31m✗\e[0m new-project: retry after invalid name succeeds\n'; ((FAIL++)); fi
+if [[ ! -e "$NEWP_DIR/bad name" ]]; then printf '  \e[32m✓\e[0m new-project: invalid name never created\n'; ((PASS++)); else printf '  \e[31m✗\e[0m new-project: invalid name never created\n'; ((FAIL++)); fi
+
+# 7g. Missing/failing git does not break the flow
+cat > "$MOCK_BIN/git" << 'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+chmod +x "$MOCK_BIN/git"
+hash -r
+nogit_out=$(printf 'n\nnogitproj\nn\nq\n' | ac 2>/dev/null | strip_ansi || true)
+rm -f "$MOCK_BIN/git"
+hash -r
+
+if [[ -d "$NEWP_DIR/nogitproj" ]]; then printf '  \e[32m✓\e[0m new-project: folder created despite git failure\n'; ((PASS++)); else printf '  \e[31m✗\e[0m new-project: folder created despite git failure\n'; ((FAIL++)); fi
+if [[ ! -d "$NEWP_DIR/nogitproj/.git" ]]; then printf '  \e[32m✓\e[0m new-project: no .git when git init fails\n'; ((PASS++)); else printf '  \e[31m✗\e[0m new-project: no .git when git init fails\n'; ((FAIL++)); fi
+assert_contains "new-project: git failure note shown" "git init failed" "$nogit_out"
+assert_contains "new-project: menu still rendered after git failure" "anycli-launcher" "$nogit_out"
+
+# 7h. Footer + help text
+foot=$(echo q | ac 2>/dev/null | strip_ansi)
+assert_contains "new-project: footer advertises n" "n  new" "$foot"
+help_out=$(printf '?\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "new-project: ? help lists n" "new project" "$help_out"
+
+# 7i. "n" as a filter prefix still filters (regression guard for key ordering)
+mkdir -p "$NEWP_DIR/nodeapp"
+node_out=$(printf 'node\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "new-project: 'node' still filters rather than opening the flow" "filter: node" "$node_out"
+assert_contains "new-project: 'node' filter still lists nodeapp" "nodeapp" "$node_out"
+
+rm -rf "$NEWP_DIR" "$NEWP_CONFIG"
+unset AC_PROJECTS_DIR
+unset -f strip_ansi
+
 # === NEW TESTS GO ABOVE THIS LINE ===
 # ═══════════════════════════════════════
 # Cleanup

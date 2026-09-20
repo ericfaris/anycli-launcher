@@ -2618,6 +2618,152 @@ _ac_config_edit_project_aliases() {
     fi
     _ac_write_config
 }
+
+# Validate a proposed new project directory name.
+#
+# Note this deliberately does NOT use _ac_safe_name: that function is a
+# config-key encoder (e.g. "my-app" -> "my_2dapp") used only when reading or
+# writing the per-project variables above. The directory created on disk must
+# stay human-readable like every other project directory, so this applies a
+# separate, lighter character-allowlist check instead.
+#
+# Prints one human-readable error message on stdout and returns 1 when the
+# name is unusable; prints nothing and returns 0 when it is fine.
+_ac_validate_new_project_name() {
+    local name="${1:-}"
+    if [[ -z "$name" ]]; then
+        printf '%s' "Name cannot be empty."
+        return 1
+    fi
+    if [[ "$name" == *"/"* || "$name" == *"\\"* ]]; then
+        printf '%s' "Name cannot contain a path separator (/ or \\) — projects are created directly inside <root>."
+        return 1
+    fi
+    if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        printf '%s' "Use letters, digits, dot, dash or underscore; must start with a letter or digit."
+        return 1
+    fi
+    if [[ -e "$_AC_PROJECTS_DIR/$name" ]]; then
+        printf "A project named '%s' already exists." "$name"
+        return 1
+    fi
+    return 0
+}
+
+# Inline "set alias/color/title/prompt" submenu for a brand-new project.
+# Same shape as _ac_config_edit_project_style's inner loop, but scoped to one
+# already-known project (no _ac_config_pick_project step) and with an extra
+# alias field.
+_ac_new_project_setup() {
+    local proj="$1" safe
+    safe="$(_ac_safe_name "$proj")"
+
+    local c_dim=$'\e[2m' c_title=$'\e[1;36m' c_num=$'\e[1;33m'
+    local c_name=$'\e[0;37m' c_prompt=$'\e[1;32m' c_val=$'\e[0;35m'
+    local reset=$'\e[0m'
+
+    while true; do
+        _ac_clear
+        local cur_alias cur_color cur_title cur_prompt
+        cur_alias="$(_ac_indirect "_AC_PROJECT_ALIAS_${safe}")"
+        cur_color="$(_ac_indirect "_AC_PROJECT_COLOR_${safe}")"
+        cur_title="$(_ac_indirect "_AC_PROJECT_TITLE_${safe}")"
+        cur_prompt="$(_ac_indirect "_AC_PROJECT_PROMPT_${safe}")"
+
+        printf "\n  %sSet up: %s%s\n" "$c_title" "$proj" "$reset"
+        printf "  %s(all optional — press d when you're done)%s\n\n" "$c_dim" "$reset"
+        printf "   %s1%s  %salias%s   %s%s%s\n"  "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${cur_alias:-(none)}" "$reset"
+        printf "   %s2%s  %scolor%s   %s%s%s\n"  "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${cur_color:-(none)}" "$reset"
+        printf "   %s3%s  %stitle%s   %s%s%s\n"  "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${cur_title:-(none)}" "$reset"
+        printf "   %s4%s  %sprompt%s  %s%s%s\n" "$c_num" "$reset" "$c_name" "$reset" "$c_val" "${cur_prompt:-(none)}" "$reset"
+        printf "\n   %s d%s  %sdone%s\n" "$c_num" "$reset" "$c_name" "$reset"
+        printf "\n  %s›%s " "$c_prompt" "$reset"
+
+        local choice
+        read -r choice || return 0
+
+        case "$choice" in
+            1)
+                _ac_edit_style_field "_AC_PROJECT_ALIAS_${safe}" \
+                    "Display name (blank to clear): "
+                ;;
+            2)
+                _ac_edit_style_field "_AC_PROJECT_COLOR_${safe}" \
+                    "Hex color (e.g. #00cc66, blank to clear): " \
+                    '^#[0-9a-fA-F]{6}$' "6-digit hex color" || continue
+                ;;
+            3)
+                _ac_edit_style_field "_AC_PROJECT_TITLE_${safe}" \
+                    "Tab title (blank to clear): "
+                ;;
+            4)
+                _ac_edit_style_field "_AC_PROJECT_PROMPT_${safe}" \
+                    "Initial prompt (blank to clear): "
+                ;;
+            d|D) return 0 ;;
+            *) continue ;;
+        esac
+    done
+}
+
+# Top-level "create a new project" flow: prompt for a name -> validate (retry
+# loop) -> mkdir -> git init -> register -> optionally offer the inline
+# alias/color/title/prompt setup screen -> return.
+_ac_new_project() {
+    local c_title=$'\e[1;36m' c_dim=$'\e[2m' c_name=$'\e[0;37m'
+    local c_prompt=$'\e[1;32m' c_err=$'\e[31m' c_ok=$'\e[32m'
+    local reset=$'\e[0m'
+
+    local name="" err_msg=""
+    while true; do
+        _ac_clear
+        printf "\n  %sNew Project%s\n" "$c_title" "$reset"
+        printf "  %sCreated in: %s%s\n\n" "$c_dim" "$(_ac_tildify "$_AC_PROJECTS_DIR")" "$reset"
+        if [[ -n "$err_msg" ]]; then
+            printf "  %s✗ %s%s\n\n" "$c_err" "$err_msg" "$reset"
+        fi
+        printf "  %sProject name (blank to cancel): %s" "$c_name" "$reset"
+
+        read -r name || return 0
+        [[ -z "$name" ]] && return 0
+
+        if err_msg="$(_ac_validate_new_project_name "$name")"; then
+            break
+        fi
+    done
+
+    local dir="${_AC_PROJECTS_DIR%/}/$name"
+    if ! mkdir -- "$dir" 2>/dev/null; then
+        printf "\n  %s✗ Could not create %s%s\n" "$c_err" "$dir" "$reset"
+        printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
+        _ac_pause
+        return 0
+    fi
+
+    local git_bin git_note
+    git_bin="$(_ac_resolve_bin git)"
+    if [[ -z "$git_bin" ]]; then
+        git_note="git not found on PATH — folder created without a repo"
+    elif "$git_bin" -C "$dir" init -q >/dev/null 2>&1; then
+        git_note="git repository initialized"
+    else
+        git_note="git init failed — folder created without a repo"
+    fi
+
+    _ac_register_project "$name"
+
+    printf "\n  %s✓ Created %s%s\n" "$c_ok" "$(_ac_tildify "$dir")" "$reset"
+    printf "  %s%s%s\n" "$c_dim" "$git_note" "$reset"
+    printf "\n  %sSet alias / color / title / prompt now? (Y/n): %s" "$c_prompt" "$reset"
+
+    local ans
+    read -r ans || ans="n"
+    if [[ -z "$ans" || "$ans" == "y" || "$ans" == "Y" ]]; then
+        _ac_new_project_setup "$name"
+    fi
+
+    return 0
+}
 # --- Changelog Viewer ---
 _ac_show_changelog() {
     _ac_clear
@@ -2673,7 +2819,7 @@ _ac_show_key_help() {
     fi
 
     printf "\n   %stype%s  filter the list by name    %s/%s  clear the filter\n" "$c_num" "$reset" "$c_num" "$reset"
-    printf "   %s c%s   config    %s v%s  changelog    %s q%s  quit\n" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset"
+    printf "   %s c%s   config    %s n%s  new project    %s v%s  changelog    %s q%s  quit\n" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset"
 
     if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" ]]; then
         printf "\n  %sResume continues the CLI's last conversation in that project;%s\n" "$c_dim" "$reset"
@@ -4457,11 +4603,11 @@ _ac_render_menu() {
         _help_key="$(printf "   %s ?%s  help" "$c_num" "$reset")"
     fi
     if _ac_update_available; then
-        printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s q%s  quit%s\n" \
-            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
+        printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s n%s  new   %s q%s  quit%s\n" \
+            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
     else
-        printf "   %s c%s  config    %s v%s  changelog   %s q%s  quit%s    %s(type to filter)%s\n" \
-            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key" "$c_dim" "$reset"
+        printf "   %s c%s  config    %s v%s  changelog   %s n%s  new   %s q%s  quit%s  %s(type to filter)%s\n" \
+            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key" "$c_dim" "$reset"
     fi
     # Session triggers (r<N> resume, p<N> pick) are documented behind the
     # "?" help key rather than shown inline, to keep the menu uncluttered.
@@ -4699,6 +4845,14 @@ ac() {
         # Key help (session triggers etc.)
         if [[ "$key" == "?" ]]; then
             _ac_show_key_help
+            continue
+        fi
+
+        # New project: create a folder (+ git repo) under the projects root
+        # and optionally configure it, then fall back into the menu, which
+        # re-scans the root every iteration so the new entry appears.
+        if [[ "$key" == "n" || "$key" == "N" ]]; then
+            _ac_new_project
             continue
         fi
 

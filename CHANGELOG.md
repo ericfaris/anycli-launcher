@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.3.0
+
+### Added
+- **Remove project from the menu.** Press `x` on the main menu to pick a
+  project and remove it: confirms deleting its local folder (defaults to no —
+  permanent), then separately offers to delete a detected GitHub `origin`
+  remote via `gh` (non-GitHub remotes are left alone), then drops any
+  per-project alias/color/title/prompt/flags so nothing lingers in
+  `config.yaml`. Declining the local-folder confirmation cancels the whole
+  flow.
+
 ## 3.2.0
 
 ### Added

@@ -10,7 +10,7 @@ If you keep all your coding projects in one folder and use AI CLI tools as your 
 
 ```
   ╭─────────────────────────────────────╮
-  │  anycli-launcher            v3.2.0  │
+  │  anycli-launcher            v3.3.0  │
   ╰─────────────────────────────────────╯
 
    1  ● terminal
@@ -146,7 +146,7 @@ cd ~/projects/anycli-launcher
 git pull
 ```
 
-Then open a new terminal (or run `source ~/.bashrc`) and run `ac`. Verify the header shows `v3.2.0`.
+Then open a new terminal (or run `source ~/.bashrc`) and run `ac`. Verify the header shows `v3.3.0`.
 
 ## Configuration
 
@@ -250,6 +250,7 @@ Press `c` from the main menu to configure:
 | u | Update kiro-cli (if that's your configured CLI) and/or the launcher itself (shown when updates available) |
 | v | Show changelog |
 | n | Create a new project folder in the projects root (`mkdir` + `git init`), then optionally set its alias/color/title/prompt |
+| x | Remove a project — confirm deleting its local folder, then (if it has a GitHub remote) separately confirm deleting that repo too via `gh` |
 | ? | Show key help (lists the r&lt;N&gt;/p&lt;N&gt; session triggers when supported) |
 | q | Quit |
 
@@ -270,6 +271,16 @@ To choose a *specific* past session rather than the most recent one, use the pic
 
 - **In the menu**: type `p` before a project number — e.g. `p3`. The `p<N>` hint appears in the `?` key help when your CLI supports a session picker.
 - **From the shell**: `ac pick <name>` or `ac <name> --resume-picker`.
+
+### Removing a project
+
+Press `x` in the menu to pick a project and remove it:
+
+1. Confirms deleting the project's local folder (defaults to **no** — this is permanent).
+2. If the folder is a git repo with a GitHub `origin` remote, separately asks whether to also delete that GitHub repo (via [`gh`](https://cli.github.com/), which must be installed and authenticated). A non-GitHub remote (GitLab, Bitbucket, self-hosted) is left alone either way — only `gh repo delete` is ever called.
+3. Deletes the local folder, then the GitHub repo if you said yes, then drops any per-project settings (alias/color/title/prompt/flags) so nothing lingers in `config.yaml` for a project that no longer exists.
+
+Declining the local-folder confirmation cancels the whole flow — nothing is deleted and no GitHub prompt is shown.
 
 ## Testing
 

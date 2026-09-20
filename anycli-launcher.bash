@@ -2764,6 +2764,122 @@ _ac_new_project() {
 
     return 0
 }
+
+# Parse an "owner/repo" slug out of a git remote URL, supporting the shapes
+# git actually hands back for a GitHub remote: SSH shorthand
+# (git@github.com:owner/repo.git), explicit ssh://, and https/http. Prints
+# nothing (and the caller treats that as "not GitHub") for anything else,
+# including GitLab/Bitbucket/self-hosted remotes and a missing/empty URL.
+_ac_github_slug_from_url() {
+    local url="${1:-}"
+    [[ -z "$url" ]] && return 0
+    local slug=""
+    case "$url" in
+        git@github.com:*)        slug="${url#git@github.com:}" ;;
+        ssh://git@github.com/*)  slug="${url#ssh://git@github.com/}" ;;
+        https://github.com/*)    slug="${url#https://github.com/}" ;;
+        http://github.com/*)     slug="${url#http://github.com/}" ;;
+        *) return 0 ;;
+    esac
+    slug="${slug%.git}"
+    slug="${slug%/}"
+    printf '%s' "$slug"
+}
+
+# Top-level "remove a project" flow: pick a project -> confirm deleting its
+# local folder (default no — this is destructive and unrecoverable) -> if it
+# has a GitHub remote, separately confirm deleting that repo too -> delete the
+# folder -> best-effort delete the GitHub repo via `gh` -> drop any per-project
+# config (flags/color/title/prompt/alias) so nothing lingers for a name that no
+# longer exists.
+_ac_remove_project() {
+    local c_title=$'\e[1;36m' c_dim=$'\e[2m' c_prompt=$'\e[1;32m'
+    local c_err=$'\e[31m' c_ok=$'\e[32m'
+    local reset=$'\e[0m'
+
+    _ac_config_pick_project "Select project to remove" || return 0
+    local proj="$_AC_PICKED_PROJECT"
+
+    # _ac_config_pick_project only keeps the basename, but a project can live
+    # under an extra dir rather than projects_dir, so re-scan to recover the
+    # actual path rm needs.
+    _ac_collect_projects
+    local dir="" d
+    for d in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
+        if [[ "$(basename "$d")" == "$proj" ]]; then
+            dir="$d"
+            break
+        fi
+    done
+    if [[ -z "$dir" || ! -d "$dir" ]]; then
+        printf "\n  %s✗ Could not locate %s on disk%s\n" "$c_err" "$proj" "$reset"
+        printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
+        _ac_pause
+        return 0
+    fi
+
+    _ac_clear
+    printf "\n  %sRemove Project%s\n" "$c_title" "$reset"
+    printf "  %s%s%s\n\n" "$c_dim" "$(_ac_tildify "$dir")" "$reset"
+    printf "  %sDelete this folder and everything in it? This cannot be undone. (y/N): %s" "$c_prompt" "$reset"
+
+    local ans
+    read -r ans || ans=""
+    if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
+        printf "\n  %sCancelled — nothing removed.%s\n" "$c_dim" "$reset"
+        printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
+        _ac_pause
+        return 0
+    fi
+
+    # Detect a GitHub remote before the folder (and its .git) is gone.
+    local gh_slug="" git_bin
+    git_bin="$(_ac_resolve_bin git)"
+    if [[ -n "$git_bin" && -d "$dir/.git" ]]; then
+        local remote_url
+        remote_url="$("$git_bin" -C "$dir" remote get-url origin 2>/dev/null)"
+        gh_slug="$(_ac_github_slug_from_url "$remote_url")"
+    fi
+
+    local delete_gh="n"
+    if [[ -n "$gh_slug" ]]; then
+        printf "\n  %sGitHub remote detected: %s%s\n" "$c_dim" "$gh_slug" "$reset"
+        printf "  %sAlso delete the GitHub repo %s? This is permanent. (y/N): %s" "$c_prompt" "$gh_slug" "$reset"
+        read -r delete_gh || delete_gh="n"
+    fi
+
+    if ! rm -rf -- "$dir"; then
+        printf "\n  %s✗ Failed to remove %s%s\n" "$c_err" "$(_ac_tildify "$dir")" "$reset"
+        printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
+        _ac_pause
+        return 0
+    fi
+    printf "\n  %s✓ Removed %s%s\n" "$c_ok" "$(_ac_tildify "$dir")" "$reset"
+
+    if [[ "$delete_gh" == "y" || "$delete_gh" == "Y" ]]; then
+        local gh_bin
+        gh_bin="$(_ac_resolve_bin gh)"
+        if [[ -z "$gh_bin" ]]; then
+            printf "  %s✗ gh not found on PATH — GitHub repo not deleted (%s)%s\n" "$c_err" "$gh_slug" "$reset"
+        elif "$gh_bin" repo delete "$gh_slug" --yes >/dev/null 2>&1; then
+            printf "  %s✓ Deleted GitHub repo %s%s\n" "$c_ok" "$gh_slug" "$reset"
+        else
+            printf "  %s✗ Failed to delete GitHub repo %s (check gh auth/permissions)%s\n" "$c_err" "$gh_slug" "$reset"
+        fi
+    fi
+
+    # Drop any per-project settings for the removed name so a stale entry
+    # doesn't linger in config.yaml for a project that no longer exists.
+    local safe
+    safe="$(_ac_safe_name "$proj")"
+    unset "_AC_CLI_FLAGS_${safe}" "_AC_PROJECT_COLOR_${safe}" "_AC_PROJECT_TITLE_${safe}" \
+        "_AC_PROJECT_PROMPT_${safe}" "_AC_PROJECT_ALIAS_${safe}"
+    _ac_write_config
+
+    printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
+    _ac_pause
+    return 0
+}
 # --- Changelog Viewer ---
 _ac_show_changelog() {
     _ac_clear
@@ -2819,7 +2935,7 @@ _ac_show_key_help() {
     fi
 
     printf "\n   %stype%s  filter the list by name    %s/%s  clear the filter\n" "$c_num" "$reset" "$c_num" "$reset"
-    printf "   %s c%s   config    %s n%s  new project    %s v%s  changelog    %s q%s  quit\n" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset"
+    printf "   %s c%s   config    %s n%s  new project    %s x%s  remove project    %s v%s  changelog    %s q%s  quit\n" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset"
 
     if [[ -n "$(_ac_cli_resume_flag "$_AC_CLI_TOOL")" ]]; then
         printf "\n  %sResume continues the CLI's last conversation in that project;%s\n" "$c_dim" "$reset"
@@ -4603,11 +4719,11 @@ _ac_render_menu() {
         _help_key="$(printf "   %s ?%s  help" "$c_num" "$reset")"
     fi
     if _ac_update_available; then
-        printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s n%s  new   %s q%s  quit%s\n" \
-            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
+        printf "   %s c%s  config    %s u%s  update ⬆   %s v%s  changelog   %s n%s  new   %s x%s  remove   %s q%s  quit%s\n" \
+            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key"
     else
-        printf "   %s c%s  config    %s v%s  changelog   %s n%s  new   %s q%s  quit%s  %s(type to filter)%s\n" \
-            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key" "$c_dim" "$reset"
+        printf "   %s c%s  config    %s v%s  changelog   %s n%s  new   %s x%s  remove   %s q%s  quit%s  %s(type to filter)%s\n" \
+            "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$c_num" "$reset" "$_help_key" "$c_dim" "$reset"
     fi
     # Session triggers (r<N> resume, p<N> pick) are documented behind the
     # "?" help key rather than shown inline, to keep the menu uncluttered.
@@ -4853,6 +4969,13 @@ ac() {
         # re-scans the root every iteration so the new entry appears.
         if [[ "$key" == "n" || "$key" == "N" ]]; then
             _ac_new_project
+            continue
+        fi
+
+        # Remove project: pick one, confirm deleting its local folder, and
+        # (if it has a GitHub remote) separately confirm deleting that repo.
+        if [[ "$key" == "x" || "$key" == "X" ]]; then
+            _ac_remove_project
             continue
         fi
 

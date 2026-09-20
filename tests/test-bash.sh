@@ -6201,6 +6201,146 @@ rm -rf "$NEWP_DIR" "$NEWP_CONFIG"
 unset AC_PROJECTS_DIR
 unset -f strip_ansi
 
+# ═══════════════════════════════════════
+echo "── Remove Project (x) ──"
+
+strip_ansi() { sed 's/\x1b\[[0-9;]*m//g'; }
+
+# 8a. _ac_github_slug_from_url unit tests
+assert_eq "github-slug: ssh shorthand" \
+    "someuser/somerepo" "$(_ac_github_slug_from_url "git@github.com:someuser/somerepo.git")"
+assert_eq "github-slug: https with .git" \
+    "someuser/somerepo" "$(_ac_github_slug_from_url "https://github.com/someuser/somerepo.git")"
+assert_eq "github-slug: https without .git" \
+    "someuser/somerepo" "$(_ac_github_slug_from_url "https://github.com/someuser/somerepo")"
+assert_eq "github-slug: explicit ssh://" \
+    "someuser/somerepo" "$(_ac_github_slug_from_url "ssh://git@github.com/someuser/somerepo.git")"
+assert_eq "github-slug: non-github remote ignored" \
+    "" "$(_ac_github_slug_from_url "https://gitlab.com/someuser/somerepo.git")"
+assert_eq "github-slug: empty url" "" "$(_ac_github_slug_from_url "")"
+
+# Mock gh, controlled per-call via GH_MOCK_EXIT / logged to GH_TEST_LOG.
+cat > "$MOCK_BIN/gh" << 'MOCK'
+#!/usr/bin/env bash
+echo "GH_CALLED: $*" >> "${GH_TEST_LOG:-/tmp/ac-gh-test.log}"
+exit "${GH_MOCK_EXIT:-0}"
+MOCK
+chmod +x "$MOCK_BIN/gh"
+hash -r
+GH_TEST_LOG="$SCRIPT_DIR/.test-gh.log"
+export GH_TEST_LOG GH_MOCK_EXIT=0
+
+_ac_cfg_dir_and_config() {
+    RM_DIR=$(mktemp -d)
+    RM_CONFIG=$(mktemp)
+    _AC_CONFIG_FILE="$RM_CONFIG"
+    export AC_PROJECTS_DIR="$RM_DIR"
+    _AC_CLI_FLAGS=""; _AC_CLI_TOOL="kiro-cli"; _AC_CLI_LAUNCH="chat"
+    _AC_AUTO_UPDATE_CHECK="false"
+    for v in $(_ac_vars_with_prefix _AC_PROJECT_ALIAS_); do unset "$v"; done
+    for v in $(_ac_vars_with_prefix _AC_PROJECT_COLOR_); do unset "$v"; done
+    for v in $(_ac_vars_with_prefix _AC_PROJECT_TITLE_); do unset "$v"; done
+    for v in $(_ac_vars_with_prefix _AC_PROJECT_PROMPT_); do unset "$v"; done
+    for v in $(_ac_vars_with_prefix _AC_CLI_FLAGS_); do unset "$v"; done
+    _ac_write_config
+    _ac_load_config
+}
+
+# 8b. Declining the local-folder confirmation removes nothing
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/keepme"
+rm_out=$(printf 'x\n1\nn\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: decline shows cancelled" "Cancelled" "$rm_out"
+if [[ -d "$RM_DIR/keepme" ]]; then printf '  \e[32m✓\e[0m remove-project: declined folder survives\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: declined folder survives\n'; ((FAIL++)); fi
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8c. Confirming removes a plain (non-git) folder
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/removeme"
+rm_out=$(printf 'x\n1\ny\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: confirmed shows removed" "Removed" "$rm_out"
+if [[ ! -e "$RM_DIR/removeme" ]]; then printf '  \e[32m✓\e[0m remove-project: folder deleted\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: folder deleted\n'; ((FAIL++)); fi
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8d. A git repo with no remote is removed without any GitHub prompt
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/gitnoremote"
+git -C "$RM_DIR/gitnoremote" init -q
+rm_out=$(printf 'x\n1\ny\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: no-remote repo removed" "Removed" "$rm_out"
+if [[ "$rm_out" != *"GitHub remote detected"* ]]; then printf '  \e[32m✓\e[0m remove-project: no GitHub prompt without a remote\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: no GitHub prompt without a remote\n'; ((FAIL++)); fi
+if [[ ! -e "$RM_DIR/gitnoremote" ]]; then printf '  \e[32m✓\e[0m remove-project: no-remote folder deleted\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: no-remote folder deleted\n'; ((FAIL++)); fi
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8e. GitHub remote detected but declined: gh is never invoked
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/ghproj"
+git -C "$RM_DIR/ghproj" init -q
+git -C "$RM_DIR/ghproj" remote add origin "git@github.com:someuser/ghproj.git"
+rm -f "$GH_TEST_LOG"
+rm_out=$(printf 'x\n1\ny\nn\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: GitHub remote detected and named" "someuser/ghproj" "$rm_out"
+if [[ ! -e "$RM_DIR/ghproj" ]]; then printf '  \e[32m✓\e[0m remove-project: local folder removed regardless of gh choice\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: local folder removed regardless of gh choice\n'; ((FAIL++)); fi
+if [[ ! -f "$GH_TEST_LOG" ]]; then printf '  \e[32m✓\e[0m remove-project: gh not called when declined\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: gh not called when declined\n'; ((FAIL++)); fi
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8f. GitHub remote detected and accepted: gh repo delete is invoked, success reported
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/ghproj2"
+git -C "$RM_DIR/ghproj2" init -q
+git -C "$RM_DIR/ghproj2" remote add origin "https://github.com/someuser/ghproj2.git"
+rm -f "$GH_TEST_LOG"
+GH_MOCK_EXIT=0
+rm_out=$(printf 'x\n1\ny\ny\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: gh delete success reported" "Deleted GitHub repo someuser/ghproj2" "$rm_out"
+assert_contains "remove-project: gh invoked with the right slug" "GH_CALLED: repo delete someuser/ghproj2 --yes" "$(cat "$GH_TEST_LOG" 2>/dev/null)"
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8g. gh repo delete failing is reported but does not undo the local removal
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/ghproj3"
+git -C "$RM_DIR/ghproj3" init -q
+git -C "$RM_DIR/ghproj3" remote add origin "git@github.com:someuser/ghproj3.git"
+rm -f "$GH_TEST_LOG"
+GH_MOCK_EXIT=1
+rm_out=$(printf 'x\n1\ny\ny\nq\n' | ac 2>/dev/null | strip_ansi)
+GH_MOCK_EXIT=0
+assert_contains "remove-project: gh delete failure reported" "Failed to delete GitHub repo" "$rm_out"
+if [[ ! -e "$RM_DIR/ghproj3" ]]; then printf '  \e[32m✓\e[0m remove-project: local folder still removed after gh failure\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: local folder still removed after gh failure\n'; ((FAIL++)); fi
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8h. Per-project config is dropped once the project is gone
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/aliased"
+_ac_assign "_AC_PROJECT_ALIAS_aliased" "My Alias"
+_ac_register_project "aliased"
+_ac_write_config
+printf 'x\n1\ny\nq\n' | ac >/dev/null 2>&1 || true
+rm_cfg="$(cat "$RM_CONFIG")"
+if [[ "$rm_cfg" != *"My Alias"* ]]; then printf '  \e[32m✓\e[0m remove-project: stale alias dropped from config\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: stale alias dropped from config\n'; ((FAIL++)); fi
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8i. Footer + help text
+_ac_cfg_dir_and_config
+foot=$(echo q | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: footer advertises x" "x  remove" "$foot"
+help_out=$(printf '?\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: ? help lists x" "remove project" "$help_out"
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8j. "x" as a filter prefix still filters (regression guard for key ordering)
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/xylophone"
+x_out=$(printf 'xyl\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: 'xyl' still filters rather than opening the flow" "filter: xyl" "$x_out"
+assert_contains "remove-project: 'xyl' filter still lists xylophone" "xylophone" "$x_out"
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+unset AC_PROJECTS_DIR GH_TEST_LOG GH_MOCK_EXIT
+rm -f "$MOCK_BIN/gh" "$SCRIPT_DIR/.test-gh.log"
+hash -r
+unset -f strip_ansi _ac_cfg_dir_and_config
+
 # === NEW TESTS GO ABOVE THIS LINE ===
 # ═══════════════════════════════════════
 # Cleanup

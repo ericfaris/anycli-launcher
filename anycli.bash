@@ -68,6 +68,26 @@ _ac_assign() {
     eval "$1=\"\$2\""
 }
 
+# Resolve "$1" to a real executable path, ignoring shell aliases and
+# functions — a portable stand-in for bash's `type -P`. When a tool name is
+# shadowed by a shell alias or function (e.g. a security wrapper aliasing
+# `kiro-cli` to `kiro-guard`), `command -v` prints the alias/function
+# definition text instead of a path, and exec-ing that literal fails with
+# "exec: alias ...: not found". `type -P` (bash) / `whence -p` (zsh) only
+# ever yield an executable path or nothing.
+#
+# zsh's `type` builtin has no -P flag at all ("bad option: -P" — it isn't a
+# semantics difference, the flag flat out doesn't exist there), so this
+# can't be a `type -P` call guarded by `emulate -L bash` the way other
+# bash/zsh differences in this file are; `whence -p` is zsh's equivalent.
+_ac_resolve_bin() {
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        whence -p "$1" 2>/dev/null
+    else
+        type -P "$1" 2>/dev/null
+    fi
+}
+
 # Map a project name to a variable-name suffix.
 #
 # Non-alphanumeric bytes are hex-escaped as _<hh> rather than collapsed to a
@@ -839,14 +859,15 @@ _ac_launch_project() {
 
     # Build the script to run in the new tab.
     #
-    # Resolve the CLI to a real executable path with `type -P`, NOT `command -v`.
-    # When the tool name is shadowed by a shell alias (e.g. a security wrapper
-    # aliases `kiro-cli` to `kiro-guard`), `command -v kiro-cli` prints the alias
-    # definition text ("alias kiro-cli='kiro-guard'"), and exec-ing that literal
-    # fails with "exec: alias ...: not found" (exit 127). `type -P` only ever
-    # yields an executable path, ignoring aliases and functions.
+    # Resolve the CLI to a real executable path via _ac_resolve_bin, NOT
+    # `command -v`. When the tool name is shadowed by a shell alias (e.g. a
+    # security wrapper aliases `kiro-cli` to `kiro-guard`), `command -v
+    # kiro-cli` prints the alias definition text ("alias kiro-cli='kiro-guard'"),
+    # and exec-ing that literal fails with "exec: alias ...: not found" (exit
+    # 127). _ac_resolve_bin only ever yields an executable path, ignoring
+    # aliases and functions.
     local cli_bin
-    cli_bin="$(type -P "$_AC_CLI_TOOL" 2>/dev/null)"
+    cli_bin="$(_ac_resolve_bin "$_AC_CLI_TOOL")"
     if [[ -z "$cli_bin" ]]; then
         # No executable on PATH (name may only be a shell alias/function, which a
         # non-interactive tab cannot use). Fall back to running in the current tab.
@@ -862,7 +883,7 @@ _ac_launch_project() {
     script_file="$(mktemp "${TMPDIR:-/tmp}/ac-tab-XXXXXXXX.sh" 2>/dev/null)" || return 1
     chmod 700 "$script_file" 2>/dev/null
 
-    # argv[0] is the resolved executable path from `type -P`. The spawned tab
+    # argv[0] is the resolved executable path from _ac_resolve_bin. The spawned tab
     # runs a NON-interactive `bash -l`, and .bashrc's standard interactive guard
     # (`case $- in *) return;;`) returns before user aliases are defined — so the
     # security-wrapper alias (kiro-cli -> kiro-guard) is not available in the tab
@@ -3976,12 +3997,13 @@ _ac_doctor() {
     printf '\n%s── AI CLI ──%s\n' "$dim" "$rst"
     printf '  %sconfigured CLI: %s %s%s\n' "$dim" "$_AC_CLI_TOOL" "$_AC_CLI_LAUNCH" "$rst"
     if command -v "$_AC_CLI_TOOL" >/dev/null 2>&1; then
-        # Report the resolved executable path (type -P), which is what the
-        # new-tab launch execs. If a shell alias shadows the tool name, note it:
-        # the new tab runs the real binary, not the alias, so this explains any
-        # divergence between current-tab (alias applies) and new-tab behavior.
+        # Report the resolved executable path (_ac_resolve_bin), which is what
+        # the new-tab launch execs. If a shell alias shadows the tool name,
+        # note it: the new tab runs the real binary, not the alias, so this
+        # explains any divergence between current-tab (alias applies) and
+        # new-tab behavior.
         local _cli_path
-        _cli_path="$(type -P "$_AC_CLI_TOOL" 2>/dev/null)"
+        _cli_path="$(_ac_resolve_bin "$_AC_CLI_TOOL")"
         if [[ -n "$_cli_path" ]]; then
             _ac_doctor_pass "$_AC_CLI_TOOL on PATH → $_cli_path"
         else

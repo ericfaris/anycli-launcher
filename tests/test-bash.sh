@@ -5368,10 +5368,10 @@ assert_contains "doctor: names the projects directory" "$DOC_ROOT" "$doc_clean"
 assert_contains "doctor: reports the configured CLI" "kiro-cli" "$doc_clean"
 assert_contains "doctor: delegates to the platform check" "platform check" "$doc_clean"
 
-# Regression: doctor reports the type -P resolved binary path (not just "on
-# PATH"). The mock kiro-cli lives in $MOCK_BIN, which is prepended to PATH, so
-# `type -P kiro-cli` must resolve there.
-assert_contains "doctor: reports resolved CLI path via type -P" \
+# Regression: doctor reports the _ac_resolve_bin resolved binary path (not
+# just "on PATH"). The mock kiro-cli lives in $MOCK_BIN, which is prepended
+# to PATH, so _ac_resolve_bin must resolve there.
+assert_contains "doctor: reports resolved CLI path via _ac_resolve_bin" \
     "kiro-cli on PATH → $MOCK_BIN/kiro-cli" "$doc_clean"
 
 # Regression: doctor warns when a shell alias shadows the configured CLI, and
@@ -5644,31 +5644,45 @@ _AC_CONFIG_FILE="$_setup_prec_cfg_saved"
 rm -rf "$_setup_prec_home"
 
 # ═══════════════════════════════════════
+echo "── _ac_resolve_bin: portable type -P / whence -p ──"
+# Regression: zsh's `type` builtin has no -P flag at all ("bad option: -P"),
+# so a bare `type -P` (used directly, not through this shim) silently broke
+# CLI resolution -- and therefore the whole new-tab launch path -- for every
+# zsh user. _ac_resolve_bin is the portable stand-in this file must use
+# instead; these assertions run under whichever shell actually executes this
+# suite (bash in CI), confirming its own branch behaves like `type -P`.
+resolved_bash_bin="$(_ac_resolve_bin bash)"
+assert_eq "resolve-bin: resolves a real command to an executable path" 0 "$([[ -x "$resolved_bash_bin" ]]; echo $?)"
+resolved_missing="$(_ac_resolve_bin definitely-not-a-real-command-xyz)"
+assert_eq "resolve-bin: nothing on PATH yields empty" "" "$resolved_missing"
+
+# ═══════════════════════════════════════
 echo "── Regression: CLI resolution under a shadowing alias ──"
 # Bug: the new-tab path resolved the CLI with `command -v "$_AC_CLI_TOOL"`.
 # When the tool name is shadowed by a shell alias (e.g. a security wrapper
 # aliases `kiro-cli` to `kiro-guard`), `command -v` prints the alias definition
 # text ("alias kiro-cli='kiro-guard'") in an interactive shell, and exec-ing
-# that literal fails with exit 127. `type -P` must be used instead — it only
-# ever yields an executable path. This guards the fix.
+# that literal fails with exit 127. _ac_resolve_bin (bash: `type -P`, zsh:
+# `whence -p`) must be used instead — it only ever yields an executable path.
+# This guards the fix.
 (
     # Define the alias, then confirm the resolution primitive the launcher uses
-    # (type -P) ignores it and returns the real mock binary path.
+    # (_ac_resolve_bin) ignores it and returns the real mock binary path.
     alias kiro-cli='some-guard-wrapper'
-    resolved="$(type -P kiro-cli 2>/dev/null)"
+    resolved="$(_ac_resolve_bin kiro-cli)"
     # The value must be a path to an executable, never alias text.
     if [[ "$resolved" == *"alias "* ]]; then
-        printf '  \e[31m✗\e[0m alias: type -P must not return alias text\n'
+        printf '  \e[31m✗\e[0m alias: _ac_resolve_bin must not return alias text\n'
         exit 1
     fi
     [[ -n "$resolved" && -x "$resolved" ]]
 )
-assert_exit "alias: type -P resolves a real executable under a shadowing alias" 0 "$?"
+assert_exit "alias: _ac_resolve_bin resolves a real executable under a shadowing alias" 0 "$?"
 
 # The generated launch script must NOT contain alias-definition text and must
 # invoke a real path. Verify by inspecting the resolution the launcher performs.
 _AC_CLI_TOOL="kiro-cli"
-cli_bin_probe="$(type -P "$_AC_CLI_TOOL" 2>/dev/null)"
+cli_bin_probe="$(_ac_resolve_bin "$_AC_CLI_TOOL")"
 assert_eq "alias: launcher resolves cli_bin to the mock path" "$MOCK_BIN/kiro-cli" "$cli_bin_probe"
 
 # ═══════════════════════════════════════

@@ -12,7 +12,7 @@ jobs:
     # this job guarantees it runs on every push.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: shellcheck --version
@@ -27,7 +27,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: bash --version
         shell: bash
         run: bash --version
@@ -52,7 +52,7 @@ jobs:
   gitbash-native-check:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Confirm this really is Git Bash, not WSL or a mock
         shell: bash
         run: |
@@ -111,7 +111,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install zsh (Linux only; macOS ships it)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh

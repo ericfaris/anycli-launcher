@@ -10,7 +10,7 @@ If you keep all your coding projects in one folder and use AI CLI tools as your 
 
 ```
   ╭─────────────────────────────────────╮
-  │  anycli-launcher            v3.3.0  │
+  │  anycli-launcher            v3.3.1  │
   ╰─────────────────────────────────────╯
 
    1  ● terminal
@@ -146,7 +146,7 @@ cd ~/projects/anycli-launcher
 git pull
 ```
 
-Then open a new terminal (or run `source ~/.bashrc`) and run `ac`. Verify the header shows `v3.3.0`.
+Then open a new terminal (or run `source ~/.bashrc`) and run `ac`. Verify the header shows `v3.3.1`.
 
 ## Configuration
 

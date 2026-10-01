@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.3.1
+
+### Fixed
+- **Remove project deleted the wrong folder when basenames collided** (e.g.
+  `work/api` vs `personal/api`): the picker now returns the exact path chosen.
+- **Remove project now guards `rm -rf`**: refuses anything not strictly under a
+  configured project root, plus `/` and `$HOME`.
+- **Unsaved work is flagged.** A repo with uncommitted changes or commits on no
+  remote requires typing the project name to confirm.
+- **gh is verified before anything is deleted.** If you opt to delete the
+  GitHub repo and `gh` is missing or unauthenticated, the whole removal is
+  cancelled instead of deleting the folder and leaving the repo behind.
+
 ## 3.3.0
 
 ### Added

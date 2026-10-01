@@ -6223,12 +6223,14 @@ assert_eq "github-slug: empty url" "" "$(_ac_github_slug_from_url "")"
 cat > "$MOCK_BIN/gh" << 'MOCK'
 #!/usr/bin/env bash
 echo "GH_CALLED: $*" >> "${GH_TEST_LOG:-/tmp/ac-gh-test.log}"
+# `gh auth status` is controlled separately from `gh repo delete`.
+[[ "$1" == "auth" ]] && exit "${GH_MOCK_AUTH_EXIT:-0}"
 exit "${GH_MOCK_EXIT:-0}"
 MOCK
 chmod +x "$MOCK_BIN/gh"
 hash -r
 GH_TEST_LOG="$SCRIPT_DIR/.test-gh.log"
-export GH_TEST_LOG GH_MOCK_EXIT=0
+export GH_TEST_LOG GH_MOCK_EXIT=0 GH_MOCK_AUTH_EXIT=0
 
 _ac_cfg_dir_and_config() {
     RM_DIR=$(mktemp -d)
@@ -6336,7 +6338,68 @@ assert_contains "remove-project: 'xyl' still filters rather than opening the flo
 assert_contains "remove-project: 'xyl' filter still lists xylophone" "xylophone" "$x_out"
 rm -rf "$RM_DIR" "$RM_CONFIG"
 
-unset AC_PROJECTS_DIR GH_TEST_LOG GH_MOCK_EXIT
+# 8k. Duplicate basenames: the picked folder (not the first same-named one) is removed
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/g1/api" "$RM_DIR/g2/api"
+_AC_SCAN_DEPTH=2
+rm_out=$(printf 'x\n2\ny\nq\n' | ac 2>/dev/null | strip_ansi)
+if [[ -d "$RM_DIR/g1/api" && ! -e "$RM_DIR/g2/api" ]]; then printf '  \e[32m✓\e[0m remove-project: duplicate basename removes the picked folder\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: duplicate basename removes the picked folder\n'; ((FAIL++)); fi
+_AC_SCAN_DEPTH=1
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8l. Dirty repo requires typing the name; a wrong answer removes nothing
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/dirty"
+git -C "$RM_DIR/dirty" init -q
+echo x > "$RM_DIR/dirty/file"
+rm_out=$(printf 'x\n1\ny\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: dirty repo warns" "uncommitted changes" "$rm_out"
+if [[ -d "$RM_DIR/dirty" ]]; then printf '  \e[32m✓\e[0m remove-project: dirty repo survives a plain y\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: dirty repo survives a plain y\n'; ((FAIL++)); fi
+rm_out=$(printf 'x\n1\ndirty\nq\n' | ac 2>/dev/null | strip_ansi)
+if [[ ! -e "$RM_DIR/dirty" ]]; then printf '  \e[32m✓\e[0m remove-project: dirty repo removed after typing the name\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: dirty repo removed after typing the name\n'; ((FAIL++)); fi
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8m. Unpushed commits are flagged too
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/unpushed"
+git -C "$RM_DIR/unpushed" init -q
+git -C "$RM_DIR/unpushed" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+rm_out=$(printf 'x\n1\nn\nq\n' | ac 2>/dev/null | strip_ansi)
+assert_contains "remove-project: unpushed commits flagged" "not pushed to any remote" "$rm_out"
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8n. gh unauthenticated: whole removal cancelled before anything is deleted
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/ghauth"
+git -C "$RM_DIR/ghauth" init -q
+git -C "$RM_DIR/ghauth" remote add origin "git@github.com:someuser/ghauth.git"
+rm -f "$GH_TEST_LOG"
+GH_MOCK_AUTH_EXIT=1
+rm_out=$(printf 'x\n1\ny\ny\nq\n' | ac 2>/dev/null | strip_ansi)
+GH_MOCK_AUTH_EXIT=0
+assert_contains "remove-project: unauthenticated gh cancels" "nothing removed" "$rm_out"
+if [[ -d "$RM_DIR/ghauth" ]]; then printf '  \e[32m✓\e[0m remove-project: folder kept when gh unauthenticated\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: folder kept when gh unauthenticated\n'; ((FAIL++)); fi
+if ! grep -q 'repo delete' "$GH_TEST_LOG" 2>/dev/null; then printf '  \e[32m✓\e[0m remove-project: repo delete not attempted when unauthenticated\n'; ((PASS++)); else printf '  \e[31m✗\e[0m remove-project: repo delete not attempted when unauthenticated\n'; ((FAIL++)); fi
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+# 8o. _ac_safe_to_remove_dir guard
+_ac_cfg_dir_and_config
+mkdir -p "$RM_DIR/ok"
+_ac_safe_to_remove_dir "$RM_DIR/ok"; rc_ok=$?
+_ac_safe_to_remove_dir "$RM_DIR"; rc_root=$?
+_ac_safe_to_remove_dir "$HOME"; rc_home=$?
+_ac_safe_to_remove_dir "/"; rc_slash=$?
+_ac_safe_to_remove_dir ""; rc_empty=$?
+_ac_safe_to_remove_dir "$(mktemp -d)"; rc_out=$?
+assert_eq "safe-remove: child of root allowed" "0" "$rc_ok"
+assert_eq "safe-remove: root itself refused" "1" "$rc_root"
+assert_eq "safe-remove: HOME refused" "1" "$rc_home"
+assert_eq "safe-remove: / refused" "1" "$rc_slash"
+assert_eq "safe-remove: empty refused" "1" "$rc_empty"
+assert_eq "safe-remove: outside roots refused" "1" "$rc_out"
+rm -rf "$RM_DIR" "$RM_CONFIG"
+
+unset AC_PROJECTS_DIR GH_TEST_LOG GH_MOCK_EXIT GH_MOCK_AUTH_EXIT
 rm -f "$MOCK_BIN/gh" "$SCRIPT_DIR/.test-gh.log"
 hash -r
 unset -f strip_ansi _ac_cfg_dir_and_config

@@ -2061,6 +2061,7 @@ _ac_config_pick_project() {
     local c_val=$'\e[0;35m' c_dim=$'\e[2m' reset=$'\e[0m'
 
     _AC_PICKED_PROJECT=""
+    _AC_PICKED_DIR=""
     _ac_collect_projects
 
     local -a names=()
@@ -2098,6 +2099,10 @@ _ac_config_pick_project() {
     (( sel >= 1 && sel <= ${#names[@]} )) || return 1
 
     _AC_PICKED_PROJECT="${names[$(( sel - 1 ))]}"
+    # Full path of the pick (index-aligned with names): two projects can share
+    # a basename across extra dirs / scan_depth 2 groups, so callers that act
+    # on the folder must not re-derive it from the name.
+    _AC_PICKED_DIR="${_AC_PROJECT_DIRS[$(( sel - 1 ))]}"
     _ac_register_project "$_AC_PICKED_PROJECT"
     return 0
 }
@@ -2786,6 +2791,49 @@ _ac_github_slug_from_url() {
     printf '%s' "$slug"
 }
 
+# Succeeds only when "$1" is safe to rm -rf as a project folder: an existing
+# directory that sits strictly beneath one of the configured project roots, and
+# is neither "/", $HOME, nor a root itself.
+_ac_safe_to_remove_dir() {
+    local dir="${1:-}"
+    [[ -n "$dir" && -d "$dir" ]] || return 1
+    local real
+    real="$(cd -P -- "$dir" 2>/dev/null && pwd -P)" || return 1
+    [[ -n "$real" && "$real" != "/" ]] || return 1
+    local home_real
+    home_real="$(cd -P -- "$HOME" 2>/dev/null && pwd -P)"
+    [[ "$real" != "$home_real" ]] || return 1
+    _ac_project_roots
+    local root root_real
+    for root in "${_AC_PROJECT_ROOTS[@]+"${_AC_PROJECT_ROOTS[@]}"}"; do
+        [[ -n "$root" && -d "$root" ]] || continue
+        root_real="$(cd -P -- "$root" 2>/dev/null && pwd -P)" || continue
+        [[ "$real" == "$root_real" ]] && return 1
+    done
+    for root in "${_AC_PROJECT_ROOTS[@]+"${_AC_PROJECT_ROOTS[@]}"}"; do
+        [[ -n "$root" && -d "$root" ]] || continue
+        root_real="$(cd -P -- "$root" 2>/dev/null && pwd -P)" || continue
+        # Compare against the unresolved parent too: the project itself may be
+        # a symlink (rm -rf then removes only the link, never the target).
+        [[ "$real" == "$root_real"/* || "$dir" == "$root"/* ]] && return 0
+    done
+    return 1
+}
+
+# Echo a short description of work that exists only locally in the repo at
+# "$1" (uncommitted changes, commits on no remote). Empty when clean or when
+# the folder isn't a git repo.
+_ac_unsaved_work_summary() {
+    local dir="$1" git_bin out=""
+    git_bin="$(_ac_resolve_bin git)"
+    [[ -n "$git_bin" && -d "$dir/.git" ]] || return 0
+    [[ -n "$("$git_bin" -C "$dir" status --porcelain 2>/dev/null)" ]] && out="uncommitted changes"
+    if [[ -n "$("$git_bin" -C "$dir" log --branches --not --remotes --oneline -n 1 2>/dev/null)" ]]; then
+        out="${out:+$out and }commits not pushed to any remote"
+    fi
+    printf '%s' "$out"
+}
+
 # Top-level "remove a project" flow: pick a project -> confirm deleting its
 # local folder (default no — this is destructive and unrecoverable) -> if it
 # has a GitHub remote, separately confirm deleting that repo too -> delete the
@@ -2800,19 +2848,11 @@ _ac_remove_project() {
     _ac_config_pick_project "Select project to remove" || return 0
     local proj="$_AC_PICKED_PROJECT"
 
-    # _ac_config_pick_project only keeps the basename, but a project can live
-    # under an extra dir rather than projects_dir, so re-scan to recover the
-    # actual path rm needs.
-    _ac_collect_projects
-    local dir="" d
-    for d in "${_AC_PROJECT_DIRS[@]+"${_AC_PROJECT_DIRS[@]}"}"; do
-        if [[ "$(basename "$d")" == "$proj" ]]; then
-            dir="$d"
-            break
-        fi
-    done
-    if [[ -z "$dir" || ! -d "$dir" ]]; then
-        printf "\n  %s✗ Could not locate %s on disk%s\n" "$c_err" "$proj" "$reset"
+    # The picker hands back the exact folder chosen (not just its basename), so
+    # a duplicate name under another root can never be deleted by mistake.
+    local dir="$_AC_PICKED_DIR"
+    if ! _ac_safe_to_remove_dir "$dir"; then
+        printf "\n  %s✗ Refusing to remove %s (not a project folder under a configured root)%s\n" "$c_err" "$proj" "$reset"
         printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
         _ac_pause
         return 0
@@ -2821,10 +2861,19 @@ _ac_remove_project() {
     _ac_clear
     printf "\n  %sRemove Project%s\n" "$c_title" "$reset"
     printf "  %s%s%s\n\n" "$c_dim" "$(_ac_tildify "$dir")" "$reset"
-    printf "  %sDelete this folder and everything in it? This cannot be undone. (y/N): %s" "$c_prompt" "$reset"
 
+    local unsaved
+    unsaved="$(_ac_unsaved_work_summary "$dir")"
     local ans
-    read -r ans || ans=""
+    if [[ -n "$unsaved" ]]; then
+        printf "  %s⚠ This repo has %s — deleting it may lose work.%s\n" "$c_err" "$unsaved" "$reset"
+        printf "  %sType the project name (%s) to confirm: %s" "$c_prompt" "$proj" "$reset"
+        read -r ans || ans=""
+        [[ "$ans" == "$proj" ]] && ans="y" || ans="n"
+    else
+        printf "  %sDelete this folder and everything in it? This cannot be undone. (y/N): %s" "$c_prompt" "$reset"
+        read -r ans || ans=""
+    fi
     if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
         printf "\n  %sCancelled — nothing removed.%s\n" "$c_dim" "$reset"
         printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
@@ -2846,6 +2895,20 @@ _ac_remove_project() {
         printf "\n  %sGitHub remote detected: %s%s\n" "$c_dim" "$gh_slug" "$reset"
         printf "  %sAlso delete the GitHub repo %s? This is permanent. (y/N): %s" "$c_prompt" "$gh_slug" "$reset"
         read -r delete_gh || delete_gh="n"
+    fi
+
+    # Verify gh can actually delete before touching anything local, so a
+    # missing/unauthenticated gh can't leave us with the folder gone but the
+    # repo still on GitHub.
+    if [[ "$delete_gh" == "y" || "$delete_gh" == "Y" ]]; then
+        local gh_pre
+        gh_pre="$(_ac_resolve_bin gh)"
+        if [[ -z "$gh_pre" ]] || ! "$gh_pre" auth status >/dev/null 2>&1; then
+            printf "\n  %s✗ gh is missing or not authenticated — cancelled, nothing removed.%s\n" "$c_err" "$reset"
+            printf "\n  %sPress any key to return...%s " "$c_dim" "$reset"
+            _ac_pause
+            return 0
+        fi
     fi
 
     if ! rm -rf -- "$dir"; then

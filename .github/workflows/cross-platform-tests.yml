@@ -6,6 +6,20 @@ on:
     branches: [main]
 
 jobs:
+  shellcheck:
+    # Dedicated lint gate on one runner. The test suite also runs shellcheck
+    # when it is installed, but runners differ on whether it is present, so
+    # this job guarantees it runs on every push.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: shellcheck --version
+        run: shellcheck --version
+      - name: Lint scripts
+        run: shellcheck -s bash -x anycli-launcher.bash tests/test-bash.sh tests/check-platform.sh tests/run-tests.sh tests/run-skill-evals.sh
+
   bash-suite:
     strategy:
       fail-fast: false

@@ -974,6 +974,7 @@ _ac_launch_project() {
     launch_argv+=("${_AC_FLAG_ARGV[@]+"${_AC_FLAG_ARGV[@]}"}")
     [[ -n "$prompt" ]] && launch_argv+=("$prompt")
 
+    # shellcheck disable=SC2094  # $script_file is only a path argument here; the emitter never reads it
     _ac_emit_tab_script "$script_file" "$title" "$dir" "${launch_argv[@]}" > "$script_file"
     chmod +x "$script_file"
 

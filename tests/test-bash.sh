@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+# Lint configuration for this test file. Each suppression is a deliberate
+# test idiom, not an oversight:
+#  SC2088 - tests assert on a LITERAL "~" (tildify, wizard candidates, config
+#           dirs); the quotes are the point.
+#  SC2069 - `cmd 2>&1 >/dev/null` intentionally captures stderr only.
+#  SC2319 - `$?` is read right after a `[[ ]]` test on purpose (assert on rc).
+#  SC2001 - sed strips ANSI escapes from captured output; a regex is clearer
+#           than ${var//} patterns here.
+#  SC2015 - `A && B || C` one-liners are pass/fail counters where B cannot fail.
+#  SC2094 - same path appears as argument and redirect target by design.
+#  SC2129 - fixture lines are appended one per statement for readability.
+#  SC2329 - helpers are invoked indirectly (stubs/overrides by the code under test).
+# shellcheck disable=SC2088,SC2069,SC2319,SC2001,SC2015,SC2094,SC2129,SC2329
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

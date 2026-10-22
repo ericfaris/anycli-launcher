@@ -46,6 +46,12 @@ jobs:
           curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
             | tar -xJ -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+      - name: Install bash 4+ (macOS only)
+        # macOS ships bash 3.2, which can't source the launcher (it needs
+        # associative arrays), so the suite never really ran there. Homebrew's
+        # bash lands ahead of /bin on PATH.
+        if: runner.os == 'macOS'
+        run: brew install bash
       - name: bash --version
         shell: bash
         run: bash --version

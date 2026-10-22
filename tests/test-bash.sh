@@ -14,6 +14,27 @@
 # shellcheck disable=SC2088,SC2069,SC2319,SC2001,SC2015,SC2094,SC2129,SC2329
 set -uo pipefail
 
+# The launcher requires bash 4+ (associative arrays). Under an older bash
+# (macOS /bin/bash is 3.2) sourcing it dies partway, and that used to end the
+# suite with exit 0, a silent false pass. Refuse to run at all instead.
+if (( BASH_VERSINFO[0] < 4 )); then
+    printf '\e[31m✗\e[0m bash %s is too old: anycli-launcher requires bash 4+\n' "$BASH_VERSION"
+    exit 1
+fi
+
+# Any abort before the summary line (unbound variable, a crash in sourced
+# code) must fail the suite, never pass it.
+_SUITE_DONE=""
+_suite_exit_guard() {
+    local rc=$?
+    if [[ -z "$_SUITE_DONE" ]]; then
+        printf '\e[31m✗\e[0m suite aborted before finishing\n'
+        rc=1
+    fi
+    exit "$rc"
+}
+trap _suite_exit_guard EXIT
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURES="$SCRIPT_DIR/fixtures"
@@ -1874,8 +1895,11 @@ unset _AC_PLATFORM
 # assertion is about the MSYSTEM branch specifically.
 if ! { [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; }; then
     unset _AC_PLATFORM
+    # Called in this shell, not via $(...): a command substitution's subshell
+    # would discard the cache, so the second call could never see it.
     export MSYSTEM="MINGW64"
     first="$(_ac_platform)"
+    _ac_platform >/dev/null
     unset MSYSTEM
     second="$(_ac_platform)"
     assert_eq "platform: real detection under MSYSTEM=MINGW64" "gitbash" "$first"
@@ -6441,4 +6465,5 @@ unset AC_PROJECTS_DIR LK_TEST_LOG _AC_TEST_RUN_MARKER _ac_td
 
 echo
 printf "── bash: %d passed, %d failed ──\n" "$PASS" "$FAIL"
+_SUITE_DONE=1
 [[ $FAIL -eq 0 ]]

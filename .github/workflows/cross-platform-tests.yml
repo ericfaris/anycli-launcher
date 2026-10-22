@@ -1,5 +1,8 @@
 name: Cross-platform test suite
 
+env:
+  SHELLCHECK_VERSION: "0.11.0"
+
 on:
   workflow_dispatch:
   push:
@@ -13,8 +16,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install shellcheck (pinned)
+        # Pinned to the release used locally: Ubuntu's apt package (and the
+        # runner's preinstalled copy) is 0.9.0, which reports findings 0.11.0
+        # doesn't, so CI and local runs disagreed on what "clean" means.
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
       - name: shellcheck --version
         run: shellcheck --version
       - name: Lint scripts
@@ -28,6 +37,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - name: Install shellcheck (pinned)
+        if: runner.os == 'Linux'
+        # Pinned to the release used locally: Ubuntu's apt package (and the
+        # runner's preinstalled copy) is 0.9.0, which reports findings 0.11.0
+        # doesn't, so CI and local runs disagreed on what "clean" means.
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
       - name: bash --version
         shell: bash
         run: bash --version

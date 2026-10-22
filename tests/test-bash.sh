@@ -4603,8 +4603,14 @@ _AC_CLI_UPDATE_AVAILABLE=0
 # An idle timeout must explain itself rather than exiting silently
 _ac_timeout_saved="$_AC_MENU_TIMEOUT"
 _AC_MENU_TIMEOUT=1
-# A sleeping writer holds the pipe open so read times out instead of hitting EOF
-timeout_out=$( (sleep 3) | ac 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
+# A writer holds the pipe open so read times out instead of hitting EOF. It
+# lives until ac returns (capped at 60s) rather than a fixed sleep: on slow
+# runners (Windows Git Bash) rendering the menu alone can outlast a short
+# sleep, so read saw EOF and the timeout path never ran.
+_timeout_done=$(mktemp -u)
+timeout_out=$( (for _ in $(seq 600); do [[ -e "$_timeout_done" ]] && break; sleep 0.1; done) \
+    | { ac 2>/dev/null; touch "$_timeout_done"; } | sed 's/\x1b\[[0-9;]*m//g' || true)
+rm -f "$_timeout_done"
 assert_contains "timeout: explains why it exited" "No input for" "$timeout_out"
 assert_contains "timeout: names the interval" "1s" "$timeout_out"
 _AC_MENU_TIMEOUT="$_ac_timeout_saved"

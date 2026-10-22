@@ -1,3 +1,8 @@
+---
+name: install-anycli-launcher
+description: Interactive install of anycli-launcher — detects available shells, asks which to install into, and wires up the source line. Use when the user says "install", "set up", or "configure anycli-launcher".
+---
+
 # Install anycli-launcher
 
 Interactive installation skill for anycli-launcher. Guides the user through shell selection and installation; the tool's own first-run wizard handles configuration.

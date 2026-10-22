@@ -67,7 +67,7 @@ echo "KIRO_CALLED: $*" >> "${LK_TEST_LOG:-/tmp/ac-test.log}"
 EOF
 chmod +x "$MOCK_BIN/kiro-cli"
 export PATH="$MOCK_BIN:$PATH"
-export LK_TEST_LOG="$SCRIPT_DIR/.test-kiro.log"
+export LK_TEST_LOG="$SCRIPT_DIR/.test.log"
 
 # Source the launcher
 source "$PROJECT_DIR/anycli-launcher.bash"

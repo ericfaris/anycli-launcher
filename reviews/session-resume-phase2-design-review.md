@@ -1,6 +1,6 @@
 # Design Review — Session-Resume Phase 2 (Session-Aware Menu)
 
-**Spec**: `.kiro/specs/session-resume/` (requirements US-3, US-4; design Component 3)
+**Spec**: `docs/specs/session-resume/` (requirements US-3, US-4; design Component 3)
 **Reviewer**: Kiro (self-review, pre-implementation gate)
 **Date**: 2026-09-04
 **Scope**: `show_sessions` toggle + `_lk_session_summary` + in-invocation cache + menu render.

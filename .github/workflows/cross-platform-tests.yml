@@ -18,7 +18,7 @@ jobs:
       - name: shellcheck --version
         run: shellcheck --version
       - name: Lint scripts
-        run: shellcheck -s bash -x anycli-launcher.bash tests/test-bash.sh tests/check-platform.sh tests/run-tests.sh tests/run-skill-evals.sh
+        run: shellcheck -s bash -x anycli-launcher.bash tests/test-bash.sh tests/check-platform.sh tests/run-tests.sh
 
   bash-suite:
     strategy:

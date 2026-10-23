@@ -9,7 +9,8 @@
 - **macOS `/bin/bash` is 3.2.** It can't source the launcher (`declare -A`), and
   the suite died partway but exited 0, so macOS was a false green for months.
   CI now brew-installs bash; `test-bash.sh` refuses bash < 4 and an EXIT trap
-  fails any run that doesn't reach the summary line.
+  fails any run that doesn't reach the summary line. That exposed 39 macOS
+  failures (#10); the macOS job is `continue-on-error` until they're fixed.
 - **Don't time races with fixed sleeps.** The idle-timeout test's `sleep 3`
   writer exited before Windows runners finished rendering the menu (EOF, not
   timeout). Keep the writer alive until the code under test returns.

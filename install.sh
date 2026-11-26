@@ -187,11 +187,13 @@ say "Installed $dir/$exe"
 case "$shell_name" in
 bash)
 	rc="$HOME/.bashrc"
+	# shellcheck disable=SC2016
 	line='eval "$(ac init bash)"'
 	path_line="export PATH=\"$dir:\$PATH\""
 	;;
 zsh)
 	rc="${ZDOTDIR:-$HOME}/.zshrc"
+	# shellcheck disable=SC2016
 	line='eval "$(ac init zsh)"'
 	path_line="export PATH=\"$dir:\$PATH\""
 	;;

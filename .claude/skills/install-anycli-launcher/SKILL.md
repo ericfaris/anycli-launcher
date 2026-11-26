@@ -1,85 +1,86 @@
 ---
 name: install-anycli-launcher
-description: Interactive install of anycli-launcher — detects available shells, asks which to install into, and wires up the source line. Use when the user says "install", "set up", or "configure anycli-launcher".
+description: Interactive install of anycli-launcher v4 (the Go `ac` binary) — picks an install method (Homebrew, scoop, install.sh/install.ps1, go install), detects available shells, asks which to wire up, adds the `ac init <shell>` line, and moves a v3 setup over. Use when the user says "install", "set up", or "configure anycli-launcher".
 ---
 
-# Install anycli-launcher
+# Install anycli-launcher (v4)
 
-Interactive installation skill for anycli-launcher. Guides the user through shell selection and installation; the tool's own first-run wizard handles configuration.
+v4 is a single `ac` binary plus one shell-integration line per shell. The
+tool's own first-run wizard handles configuration; this skill only gets the
+binary on PATH and the integration line in place.
 
-## Trigger
+## Step 1: Detect (silently, before asking)
 
-User says "install", "set up", "configure anycli-launcher", or similar.
+1. OS / arch (`uname -sm`; Windows: PowerShell `$env:PROCESSOR_ARCHITECTURE`).
+2. Existing binary: `command -v ac` alone is misleading — macOS ships
+   `/usr/sbin/ac` and PowerShell has an `ac` alias. Check
+   `ac --version 2>/dev/null | grep -q anycli-launcher` (pwsh:
+   `(Get-Command ac -CommandType Application | Select-Object -First 1).Source`).
+   If installed, `ac --version` also prints how it was installed and the
+   update command.
+3. Package managers present: `brew`, `scoop`, `go` (needs Go 1.26+).
+4. Shells installed: `bash`, `zsh`, `fish`, `pwsh`.
+5. v3 leftovers: a `source .../anycli-launcher.bash` line in `~/.bashrc` /
+   `~/.zshrc`, and `~/.config/anycli-launcher/config.yaml`.
+6. Known AI CLIs on PATH (`claude`, `codex`, `aider`, `goose`, `kiro-cli`,
+   `amp`) — informational only.
 
-## Procedure
+## Step 2: Install the binary (ask which method; recommend the first that fits)
 
-### Step 1: Detect Environment
+| Method | Command |
+|---|---|
+| Homebrew (macOS/Linux) | `brew install --cask ericfaris/tap/anycli-launcher` |
+| scoop (Windows) | `scoop bucket add ericfaris https://github.com/ericfaris/scoop-bucket` then `scoop install anycli-launcher` |
+| Script (Linux/macOS) | `curl -fsSL https://github.com/ericfaris/anycli-launcher/releases/latest/download/install.sh \| sh` |
+| Script (Windows) | `irm https://github.com/ericfaris/anycli-launcher/releases/latest/download/install.ps1 \| iex` |
+| Go | `go install github.com/ericfaris/anycli-launcher/v4/cmd/ac@latest` |
 
-Before asking anything, gather context silently:
+The scripts verify SHA-256 against the release's `checksums.txt` and fail
+closed. `install.sh` installs to `~/.local/bin` (`--dir` / `$AC_INSTALL_DIR`),
+`install.ps1` to `%LOCALAPPDATA%\Programs\anycli-launcher`. Neither touches rc
+files unless passed `--setup` / `-Setup`; prefer doing Step 3 here so the user
+sees exactly what is added. If the install dir is not on PATH, add it in the
+same rc file, before the init line.
 
-1. Check which shells are available: `zsh --version`, `bash --version`
-2. Check if already installed by looking for `anycli-launcher.bash` in `~/.zshrc` or `~/.bashrc`
-3. Check if `~/.config/anycli-launcher/config.yaml` already exists
-4. Check whether any known AI CLI (`claude`, `kiro-cli`, `aider`, `goose`, `codex`, `amp`, or another the user names) is on PATH — anycli-launcher is CLI-agnostic, so this is informational, not a hard requirement
+## Step 3: Shell integration (ask which shells; only offer installed ones)
 
-### Step 2: Shell Selection
+Append once (skip if already present) to each chosen shell's rc file:
 
-Present available options based on what's installed:
+| Shell | File | Line |
+|---|---|---|
+| bash | `~/.bashrc` | `eval "$(ac init bash)"` |
+| zsh | `${ZDOTDIR:-~}/.zshrc` | `eval "$(ac init zsh)"` |
+| fish | `~/.config/fish/config.fish` | `ac init fish \| source` |
+| pwsh | `$PROFILE` | `Invoke-Expression (& (Get-Command ac -CommandType Application \| Select-Object -First 1).Source init pwsh \| Out-String)` |
 
-```
-Which shell do you use?
+Never use a bare `ac init pwsh` for PowerShell: the built-in `ac` alias
+(Add-Content) or macOS `/usr/sbin/ac` would run instead.
 
-  1  zsh   (source from ~/.zshrc)
-  2  bash  (source from ~/.bashrc)
-```
+Coming from v3: remove (or comment out) the old
+`source .../anycli-launcher.bash` line in the same rc file, or the v3
+function shadows the v4 one. Ask before editing it.
 
-Only show shells that are actually installed on the system. If only one shell is available, confirm it rather than presenting a menu.
+## Step 4: Hand off to the wizard
 
-If already installed for the selected shell, inform the user and ask if they want to reinstall or skip to just running `ac`.
+Tell the user to open a new shell and run `ac`. With no `config.toml`, the
+first run imports a v3 `config.yaml` automatically (or `ac migrate` does it
+explicitly and lists what was dropped), otherwise asks for the projects
+directory, the AI CLI and default flags. `ac setup` re-runs those questions.
 
-### Step 3: Install
+## Step 5: Verify
 
-Based on selection, append the source line to the appropriate RC file:
+- `ac --version` prints `anycli-launcher 4.x.y` plus the update command.
+- `ac doctor` should say "shell integration active" when run from the new
+  shell; paste its output for any bug report.
 
-**zsh** — append to `~/.zshrc`:
-```bash
-# anycli-launcher
-source ~/projects/anycli-launcher/anycli-launcher.bash
-```
+Keep it conversational: one question at a time.
 
-**bash** — append to `~/.bashrc`:
-```bash
-# anycli-launcher
-source ~/projects/anycli-launcher/anycli-launcher.bash
-```
-
-Adjust the path if the user cloned anycli-launcher somewhere other than `~/projects/anycli-launcher`.
-
-After appending, confirm success and tell the user to reload their shell (or offer to reload for them).
-
-### Step 4: Hand off to the built-in wizard
-
-Don't collect configuration in this skill — anycli-launcher's own first-run wizard does that (projects directory, which AI CLI to launch, default flags) the first time `ac` is run with no config file present, and writes `~/.config/anycli-launcher/config.yaml` directly.
-
-Just tell the user to run `ac` to go through it. If they want to change something later, `ac setup` re-runs the same three questions with current values pre-filled, and `ac` → `c` opens the full config menu.
-
-### Step 5: Verify
-
-After installation:
-
-1. Confirm the source line exists in the RC file
-2. Tell the user to run `ac` — this both verifies the install and (on first run) starts the setup wizard
-3. If they hit a problem, `ac doctor` prints a full health check (config, projects directory, configured CLI on PATH, resume/picker support) they can paste into a bug report
-
-### Output Format
-
-Keep responses conversational and brief. One question at a time. Don't dump all steps at once — guide the user through sequentially.
-
-## Error Handling
+## Error handling
 
 | Situation | Action |
-|-----------|--------|
-| RC file doesn't exist | Create it (e.g., `~/.bashrc` may not exist on some systems) |
-| Source line already present | Skip, inform user it's already installed |
-| No AI CLI found on PATH | Not fatal — the first-run wizard will ask the user to type the command name manually |
-| No write permission to RC file | Error with clear message, suggest manual installation |
+|---|---|
+| Checksum mismatch / download failed in the script | Stop; don't retry with checks disabled. Suggest another method or a release archive |
+| Install dir not on PATH | Add it to the rc file before the init line |
+| RC file missing | Create it |
+| Integration line already present | Skip and say so |
+| No AI CLI found | Not fatal; the wizard lets the user type a command |

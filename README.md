@@ -28,12 +28,44 @@ no GNU/BSD tool differences. (v3, the bash version, lives on the `v3` branch.)
 
 ## Install
 
-> Release builds (Homebrew, scoop, install script) come in a later release.
-> Until then, build from source with Go 1.26+:
+Pick one way to install the `ac` binary:
+
+| How | Command | Update |
+|---|---|---|
+| Homebrew (macOS, Linux) | `brew install --cask ericfaris/tap/anycli-launcher` | `brew upgrade anycli-launcher` |
+| scoop (Windows) | `scoop bucket add ericfaris https://github.com/ericfaris/scoop-bucket`<br>`scoop install anycli-launcher` | `scoop update anycli-launcher` |
+| Script (Linux, macOS) | `curl -fsSL https://github.com/ericfaris/anycli-launcher/releases/latest/download/install.sh \| sh` | run it again |
+| Script (Windows) | `irm https://github.com/ericfaris/anycli-launcher/releases/latest/download/install.ps1 \| iex` | run it again |
+| Go 1.26+ | `go install github.com/ericfaris/anycli-launcher/v4/cmd/ac@latest` | run it again |
+
+Or download an archive from [Releases](https://github.com/ericfaris/anycli-launcher/releases)
+(`anycli-launcher_<os>_<arch>.tar.gz`, `.zip` on Windows) and put `ac` on your PATH.
+
+The install scripts check the archive's SHA-256 against the release's
+`checksums.txt` and refuse to install on a mismatch. `install.sh` installs to
+`~/.local/bin` (`--dir` or `$AC_INSTALL_DIR` to change it, `--version v4.0.0`
+to pin a release). `install.ps1` installs to
+`%LOCALAPPDATA%\Programs\anycli-launcher`. Both print the line to add for
+your shell and only edit your rc file, `$PROFILE` or PATH if you pass
+`--setup` (`-Setup` on Windows):
 
 ```sh
-go install github.com/ericfaris/anycli-launcher/cmd/ac@latest
+curl -fsSL https://github.com/ericfaris/anycli-launcher/releases/latest/download/install.sh | sh -s -- --setup
 ```
+
+`checksums.txt` is signed with Sigstore (keyless, from the release workflow).
+To verify it yourself, download `checksums.txt` and `checksums.txt.sigstore.json`
+from the release and run:
+
+```sh
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/ericfaris/anycli-launcher/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+sha256sum --ignore-missing -c checksums.txt
+```
+
+There is no self-update. `ac --version` and `ac doctor` show the version and,
+without any network call, the update command for the way you installed it.
 
 Then add the shell integration. It defines an `ac` function so the binary can
 change your shell's directory:
@@ -43,7 +75,11 @@ change your shell's directory:
 | bash | `~/.bashrc` | `eval "$(ac init bash)"` |
 | zsh | `~/.zshrc` | `eval "$(ac init zsh)"` |
 | fish | `~/.config/fish/config.fish` | `ac init fish \| source` |
-| PowerShell | `$PROFILE` | `Invoke-Expression (& (Get-Command ac -CommandType Application | Select-Object -First 1).Source init pwsh \| Out-String)` |
+| PowerShell | `$PROFILE` | `Invoke-Expression (& (Get-Command ac -CommandType Application \| Select-Object -First 1).Source init pwsh \| Out-String)` |
+
+PowerShell resolves the binary with `Get-Command -CommandType Application`
+because Windows PowerShell has a built-in `ac` alias (Add-Content) and macOS
+has `/usr/sbin/ac`.
 
 How it works: the `ac` function runs the binary with `--cd-file <tmp>`. When
 you pick a project, the binary writes its path to that file, runs your CLI
@@ -378,7 +414,15 @@ the shim smoke test in bash and zsh (Linux, plus macOS's bash 3.2) and pwsh
 tmux is installed, and `TestTabBackendE2E` runs a whole tab launch through a
 fake terminal. `TestTaskE2E` runs a task session through the real binary and
 real git, and `TestTmuxLiveness` checks task status against a real tmux.
-The plan for the next release (packaging) is in `docs/V4-PLAN.md`.
+The `release-check` job runs shellcheck on `install.sh`, `goreleaser check`,
+a snapshot build of every archive, and installs from that snapshot with
+`install.sh`. `internal/release` tests both install scripts against a fake
+release served locally (no network).
+
+Releases: push a `v*` tag and `.github/workflows/release.yml` tests, then runs
+goreleaser (archives, `checksums.txt` + cosign signature, SBOMs, Homebrew
+cask, scoop manifest). Local dry run:
+`goreleaser release --snapshot --clean --skip=sign,sbom` (output in `dist/`).
 
 Tests never touch your real history or task registry: the app tests pass
 `Env.FrecencyPath` (the registry sits next to it), and the e2e tests set

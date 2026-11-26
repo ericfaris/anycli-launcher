@@ -1,5 +1,55 @@
 # Changelog
 
+## 4.0.0
+
+A rewrite in Go: one static `ac` binary for Linux, macOS and Windows
+(amd64/arm64) plus a few lines of shell integration for bash, zsh, fish and
+PowerShell. No bash 4, zsh-shim, GNU/BSD or Git Bash differences. v3 stays on
+the `v3` branch for fixes only.
+
+### Breaking changes
+- **Install is a binary, not a sourced script.** Remove the
+  `source .../anycli-launcher.bash` line from your rc file, install `ac`
+  (Homebrew, scoop, `install.sh`/`install.ps1`, `go install` or a release
+  archive; see the README) and add the `ac init <shell>` line instead.
+- **Config is TOML** (`~/.config/anycli-launcher/config.toml`). On first run
+  `ac` imports the v3 `config.yaml` (or the older flat `config`) and leaves it
+  in place; run `ac migrate [file] [--force]` to do it yourself. It reports
+  what it drops: tracked apps, `show_sessions` and Windows Terminal theme
+  names.
+- **Removed:** self-update (use your package manager; `ac --version` and
+  `ac doctor` print the right command, offline), the theme editor and custom
+  themes (presets `default`, `mono`, `dusk` remain), the changelog viewer and font config.
+- **Tabs** run `ac __tab-exec <spec>` (data in a 0600 JSON file) instead of a
+  generated bash script.
+- The Go module path is `github.com/ericfaris/anycli-launcher/v4`.
+
+### Added
+- Per-project `.ac.toml` overlay (your `config.toml` wins field by field).
+- Type-to-filter in the menu with fuzzy ranking, and zoxide-style frecency:
+  `ac <partial>` picks the project you launch most; `sort_order = "recent"`.
+- Fuzzy name matching after exact, case-insensitive, prefix and substring.
+- Launch backends: `here`, `tab` (Windows Terminal, iTerm2, Terminal.app,
+  kitty, WezTerm, GNOME Terminal), `tmux` and `zellij` (a session per
+  project, reattach), chosen globally, per project or with `--backend`;
+  `auto` keeps v3's rule. An unavailable backend falls back to `here`.
+- Task sessions: `ac <project> --task "..."` starts the CLI in a new git
+  worktree on branch `ac/<slug>`; `ac running` / `w` in the menu shows them,
+  `ac finish` removes a worktree (asks; keeps the branch), `ac prune`.
+- Declarative CLI profiles for claude, codex, aider, goose, kiro-cli and amp
+  (resume and session picker where the CLI has them).
+- `ac doctor` covers config, overlays, history, CLI, shell integration,
+  backends, task worktrees and the version / update command.
+- Releases: signed `checksums.txt` (cosign keyless), SBOMs, Homebrew cask,
+  scoop manifest, and install scripts that refuse a checksum mismatch.
+
+### Kept from v3
+- Number keys, `r<N>`/`p<N>` resume and picker, `n` new, `x<N>` remove, `c`
+  config, the first-run wizard and `ac setup`.
+- All `ac remove` guards: path strictly under a root, never `/` or `$HOME`,
+  typed confirmation for unsaved work, `gh` verified before anything is
+  deleted.
+
 ## 3.3.1
 
 ### Fixed

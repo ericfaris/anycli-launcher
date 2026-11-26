@@ -1,0 +1,521 @@
+// Package app implements the ac command: argument dispatch, the menu loop,
+// and the doctor/new/remove/setup/migrate subcommands. Everything external
+// (stdio, PATH lookups, subprocesses, the TUI) comes in through Env so the
+// flows are testable without a terminal.
+package app
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/ericfaris/anycli-launcher/internal/clis"
+	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/internal/launch"
+	"github.com/ericfaris/anycli-launcher/internal/projects"
+	"github.com/ericfaris/anycli-launcher/internal/shim"
+	"github.com/ericfaris/anycli-launcher/internal/tui"
+)
+
+// Version is set at build time with -ldflags "-X .../internal/app.Version=...".
+var Version = "4.0.0-dev"
+
+// Env is the outside world.
+type Env struct {
+	Stdin          io.Reader
+	Stdout, Stderr io.Writer
+	ConfigPath     string
+	Home           string
+	// IsTTY reports whether stdin is interactive (gates the first-run wizard).
+	IsTTY    bool
+	LookPath func(string) (string, error)
+	// Run executes a helper command (git, gh) in dir and returns stdout.
+	Run      func(dir, name string, args ...string) (string, error)
+	Launcher launch.Backend
+	RunMenu  func(tui.Options) (tui.Result, error)
+	// Editor opens path for editing (ac config).
+	Editor func(path string) error
+}
+
+// DefaultRun runs a command and returns trimmed stdout.
+func DefaultRun(dir, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+type app struct {
+	env       *Env
+	cdFile    string
+	cfg       config.Config
+	cfgExists bool
+	warns     []string
+	warned    bool
+	in        *bufio.Reader
+}
+
+// Main runs ac with args (without the program name) and returns the exit code.
+func Main(args []string, env *Env) int {
+	a := &app{env: env}
+	if a.env.LookPath == nil {
+		a.env.LookPath = exec.LookPath
+	}
+	if a.env.Run == nil {
+		a.env.Run = DefaultRun
+	}
+	if a.env.ConfigPath == "" {
+		a.env.ConfigPath = config.DefaultPath()
+	}
+	if a.env.Home == "" {
+		a.env.Home, _ = os.UserHomeDir()
+	}
+	args, err := a.takeCDFile(args)
+	if err != nil {
+		return a.fail(2, err)
+	}
+	return a.dispatch(args)
+}
+
+func (a *app) takeCDFile(args []string) ([]string, error) {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--cd-file":
+			if i+1 >= len(args) {
+				return nil, errors.New("--cd-file needs a path")
+			}
+			a.cdFile = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--cd-file="):
+			a.cdFile = strings.TrimPrefix(args[i], "--cd-file=")
+		default:
+			out = append(out, args[i])
+		}
+	}
+	return out, nil
+}
+
+func (a *app) printf(format string, args ...any) { fmt.Fprintf(a.env.Stdout, format, args...) }
+func (a *app) eprintf(format string, args ...any) {
+	fmt.Fprintf(a.env.Stderr, format, args...)
+}
+
+func (a *app) fail(code int, err error) int {
+	a.eprintf("ac: %v\n", err)
+	return code
+}
+
+// load reads config.toml, auto-importing a v3 config the first time.
+func (a *app) load() error {
+	path := a.env.ConfigPath
+	if !config.Exists(path) {
+		if src := legacySource(path); src != "" {
+			if err := a.migrate(src, path, false); err != nil {
+				a.eprintf("ac: could not import v3 config %s: %v\n", src, err)
+			}
+		}
+	}
+	cfg, warns, err := config.Load(path)
+	a.cfg, a.warns = cfg, warns
+	a.cfgExists = err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if !a.warned {
+		for _, w := range warns {
+			a.eprintf("ac: %s (%s)\n", w, path)
+		}
+		a.warned = true
+	}
+	return nil
+}
+
+// legacySource finds a v3 config next to config.toml.
+func legacySource(tomlPath string) string {
+	dir := filepath.Dir(tomlPath)
+	for _, name := range []string{"config.yaml", "config"} {
+		if p := filepath.Join(dir, name); config.Exists(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+// wordCommands are subcommands a same-named project overrides (v3 parity).
+var wordCommands = map[string]bool{
+	"help": true, "version": true, "list": true, "config": true,
+	"doctor": true, "setup": true, "resume": true, "pick": true,
+}
+
+func (a *app) dispatch(args []string) int {
+	mode := clis.Fresh
+	var rest []string
+	for _, x := range args {
+		switch x {
+		case "--resume-picker":
+			mode = clis.Picker
+		case "--resume", "-r":
+			mode = clis.Resume
+		default:
+			rest = append(rest, x)
+		}
+	}
+	args = rest
+
+	if len(args) > 0 {
+		switch args[0] {
+		case "-h", "--help":
+			a.usage(a.env.Stdout)
+			return 0
+		case "-V", "--version":
+			a.printf("anycli-launcher %s\n", Version)
+			return 0
+		case "init":
+			return a.cmdInit(args[1:])
+		}
+	}
+	if err := a.load(); err != nil {
+		return a.fail(1, err)
+	}
+	if len(args) == 0 {
+		if mode != clis.Fresh {
+			return a.fail(2, fmt.Errorf("--%s needs a project name", map[clis.Mode]string{clis.Resume: "resume", clis.Picker: "resume-picker"}[mode]))
+		}
+		return a.menu()
+	}
+
+	cmd := args[0]
+	if wordCommands[cmd] && projects.ExactExists(projects.Discover(a.cfg), cmd) {
+		return a.launchByName(cmd, mode)
+	}
+	switch cmd {
+	case "help":
+		a.usage(a.env.Stdout)
+		return 0
+	case "version":
+		a.printf("anycli-launcher %s\n", Version)
+		return 0
+	case "-l", "--list", "list":
+		return a.list()
+	case "doctor":
+		return a.doctor()
+	case "setup":
+		return a.setup()
+	case "config":
+		return a.editConfig()
+	case "migrate":
+		return a.cmdMigrate(args[1:])
+	case "new":
+		name := ""
+		if len(args) > 1 {
+			name = args[1]
+		}
+		return a.newProject(name, true)
+	case "remove", "rm":
+		if len(args) < 2 {
+			return a.fail(2, errors.New("remove needs a project name (usage: ac remove <name>)"))
+		}
+		return a.removeByName(args[1])
+	case "resume", "pick":
+		if len(args) < 2 {
+			return a.fail(2, fmt.Errorf("%s needs a project name (usage: ac %s <name>)", cmd, cmd))
+		}
+		m := clis.Resume
+		if cmd == "pick" {
+			m = clis.Picker
+		}
+		return a.launchByName(args[1], m)
+	case "--":
+		if len(args) < 2 {
+			return a.fail(2, errors.New("-- needs a project name"))
+		}
+		return a.launchByName(args[1], mode)
+	}
+	if strings.HasPrefix(cmd, "-") {
+		a.eprintf("ac: unknown option: %s\n", cmd)
+		a.usage(a.env.Stderr)
+		return 2
+	}
+	return a.launchByName(cmd, mode)
+}
+
+func (a *app) cmdInit(args []string) int {
+	if len(args) != 1 {
+		return a.fail(2, fmt.Errorf("usage: ac init <%s>", strings.Join(shim.Shells(), "|")))
+	}
+	s, err := shim.Script(args[0])
+	if err != nil {
+		return a.fail(2, err)
+	}
+	a.printf("%s", s)
+	return 0
+}
+
+func (a *app) requireRoot() error {
+	root := a.cfg.ProjectsRoot()
+	if st, err := os.Stat(root); err != nil || !st.IsDir() {
+		return fmt.Errorf("projects directory not found: %s\n    run 'ac setup', set projects_dir in %s, or export AC_PROJECTS_DIR", root, a.env.ConfigPath)
+	}
+	return nil
+}
+
+func (a *app) launchByName(query string, mode clis.Mode) int {
+	if err := a.requireRoot(); err != nil {
+		return a.fail(1, err)
+	}
+	matches := projects.Resolve(projects.Discover(a.cfg), query)
+	switch len(matches) {
+	case 0:
+		a.eprintf("ac: no project matching '%s'\n    run 'ac list' to see what is available\n", query)
+		return 1
+	case 1:
+		return a.launchProject(matches[0], mode)
+	}
+	a.eprintf("ac: '%s' matches more than one project:\n", query)
+	for _, m := range matches {
+		a.eprintf("      %s\n", m.Label())
+	}
+	return 1
+}
+
+func (a *app) launchProject(p projects.Project, mode clis.Mode) int {
+	if p.OverlayErr != nil {
+		a.eprintf("ac: ignoring %s: %v\n", config.OverlayFile, p.OverlayErr)
+	}
+	return a.launchDir(p.Dir, p.Settings, mode)
+}
+
+// launchDir launches the CLI in dir with the given settings.
+func (a *app) launchDir(dir string, s config.Project, mode clis.Mode) int {
+	cli := a.cfg.CLI
+	launchOverride := a.cfg.CLILaunch
+	if s.CLI != "" && s.CLI != cli {
+		cli, launchOverride = s.CLI, ""
+	}
+	if cli == "" {
+		return a.fail(1, errors.New("no AI CLI configured yet; run 'ac setup'"))
+	}
+	prof, _ := clis.Lookup(cli)
+	inv := prof.Build(launchOverride, config.ResolveFlags(a.cfg.DefaultFlags, s), s.Prompt, mode)
+	for _, n := range inv.Notes {
+		a.eprintf("  %s\n", n)
+	}
+	l := a.env.Launcher
+	if l == nil {
+		l = launch.Here{Stdin: a.env.Stdin, Stdout: a.env.Stdout, Stderr: a.env.Stderr, LookPath: a.env.LookPath}
+	}
+	code, err := l.Launch(launch.Request{Dir: dir, Name: cli, Args: inv.Args, Title: s.Title, CDFile: a.cdFile})
+	if err != nil {
+		if errors.Is(err, launch.ErrNotFound) {
+			a.eprintf("ac: %v (configured cli %q); run 'ac doctor'\n", err, cli)
+			return code
+		}
+		return a.fail(code, err)
+	}
+	return code
+}
+
+// cdOnly hands dir to the shim without launching anything.
+func (a *app) cdOnly(dir string) int {
+	if a.cdFile == "" {
+		a.eprintf("ac: shell integration not active, so ac can't change your directory.\n    Add to your shell rc: eval \"$(ac init %s)\"\n    Then: cd %s\n", guessShell(), dir)
+		return 0
+	}
+	if err := launch.WriteCDFile(a.cdFile, dir); err != nil {
+		return a.fail(1, err)
+	}
+	return 0
+}
+
+func guessShell() string {
+	sh := filepath.Base(os.Getenv("SHELL"))
+	switch sh {
+	case "zsh", "fish", "bash":
+		return sh
+	}
+	if os.Getenv("PSModulePath") != "" && os.Getenv("SHELL") == "" {
+		return "pwsh"
+	}
+	return "bash"
+}
+
+func (a *app) list() int {
+	if err := a.requireRoot(); err != nil {
+		return a.fail(1, err)
+	}
+	for _, p := range projects.Discover(a.cfg) {
+		if l := p.Label(); l != p.Name {
+			a.printf("%s\t%s\n", p.Name, l)
+		} else {
+			a.printf("%s\n", p.Name)
+		}
+	}
+	return 0
+}
+
+// configDir is the CLI's settings folder when it exists (menu shortcut).
+func (a *app) configDir() string {
+	d := a.cfg.CLIConfigDir
+	if d == "" {
+		prof, _ := clis.Lookup(a.cfg.CLI)
+		d = prof.ConfigDir
+	}
+	if d == "" {
+		return ""
+	}
+	d = config.ExpandHome(d)
+	if st, err := os.Stat(d); err == nil && st.IsDir() {
+		return d
+	}
+	return ""
+}
+
+// entries builds the numbered menu: terminal, root, [config], projects.
+func (a *app) entries(list []projects.Project) []tui.Entry {
+	root := a.cfg.ProjectsRoot()
+	es := []tui.Entry{
+		{Kind: tui.KindTerminal, Label: "terminal", Dir: root},
+		{Kind: tui.KindRoot, Label: filepath.Base(root), Dir: root},
+	}
+	if d := a.configDir(); d != "" {
+		es = append(es, tui.Entry{Kind: tui.KindConfig, Label: filepath.Base(d), Dir: d})
+	}
+	for _, p := range list {
+		es = append(es, tui.Entry{Kind: tui.KindProject, Label: p.Label(), Dir: p.Dir})
+	}
+	return es
+}
+
+func (a *app) shouldRunWizard() bool {
+	if a.cfgExists || !a.env.IsTTY {
+		return false
+	}
+	if d := os.Getenv("AC_PROJECTS_DIR"); d != "" {
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *app) menu() int {
+	if a.shouldRunWizard() {
+		if code := a.wizard(); code != 0 {
+			return code
+		}
+	}
+	if a.env.RunMenu == nil {
+		return a.fail(1, errors.New("interactive menu unavailable"))
+	}
+	for {
+		if err := a.requireRoot(); err != nil {
+			return a.fail(1, err)
+		}
+		list := projects.Discover(a.cfg)
+		prof, _ := clis.Lookup(a.cfg.CLI)
+		res, err := a.env.RunMenu(tui.Options{
+			Version:   Version,
+			CLI:       a.cfg.CLI,
+			Entries:   a.entries(list),
+			ShowGit:   a.cfg.ShowGitStatus,
+			CanResume: len(prof.Resume) > 0,
+			CanPick:   len(prof.Picker) > 0,
+			Theme:     tui.NewTheme(a.cfg.Theme, nil),
+		})
+		if err != nil {
+			return a.fail(1, err)
+		}
+		switch res.Action {
+		case tui.ActQuit:
+			return 0
+		case tui.ActNew:
+			a.newProject("", false)
+		case tui.ActConfig:
+			a.editConfig()
+		case tui.ActRemove:
+			if p, ok := byDir(list, res.Entry.Dir); ok {
+				a.removeProject(p)
+			}
+		case tui.ActSelect:
+			switch res.Entry.Kind {
+			case tui.KindTerminal:
+				return a.cdOnly(res.Entry.Dir)
+			case tui.KindRoot, tui.KindConfig:
+				return a.launchDir(res.Entry.Dir, a.cfg.Settings(filepath.Base(res.Entry.Dir), nil), res.Mode)
+			default:
+				if p, ok := byDir(list, res.Entry.Dir); ok {
+					return a.launchProject(p, res.Mode)
+				}
+				return 1
+			}
+		}
+		// Submenus may have changed the config or the project list.
+		if err := a.load(); err != nil {
+			return a.fail(1, err)
+		}
+	}
+}
+
+func byDir(list []projects.Project, dir string) (projects.Project, bool) {
+	for _, p := range list {
+		if p.Dir == dir {
+			return p, true
+		}
+	}
+	return projects.Project{}, false
+}
+
+func (a *app) editConfig() int {
+	path := a.env.ConfigPath
+	if !config.Exists(path) {
+		if err := config.Save(path, a.cfg); err != nil {
+			return a.fail(1, err)
+		}
+	}
+	if a.env.Editor == nil {
+		a.printf("Config file: %s\n(set $EDITOR to open it with 'ac config')\n", path)
+		return 0
+	}
+	if err := a.env.Editor(path); err != nil {
+		return a.fail(1, err)
+	}
+	return 0
+}
+
+func (a *app) usage(w io.Writer) {
+	fmt.Fprintf(w, `anycli-launcher %s - launch your AI CLI in a project directory
+
+Usage:
+  ac                       open the interactive menu
+  ac <name>                launch directly in the matching project
+  ac <name> -r|--resume    resume the project's most recent session
+  ac <name> --resume-picker  pick a session to resume
+  ac resume <name>         same as --resume
+  ac pick <name>           same as --resume-picker
+  ac list                  list projects (name, or name<TAB>label)
+  ac new [name]            create a project folder (+ git init) in the root
+  ac remove <name>         delete a project folder (asks first; exact name)
+  ac config                open the config file in $EDITOR
+  ac setup                 re-run guided setup (keeps existing values)
+  ac doctor                check configuration and dependencies
+  ac migrate [file]        import a v3 config.yaml into config.toml
+  ac init <bash|zsh|fish|pwsh>  print shell integration
+  ac help | version
+
+<name> matches a directory name or alias: exact, case-insensitive, prefix,
+then substring. A project named like help/list/config/doctor/setup/resume/
+pick/version takes precedence over that subcommand.
+
+Shell integration (needed for ac to cd your shell):
+  bash/zsh: eval "$(ac init bash)"     fish: ac init fish | source
+  pwsh:     Invoke-Expression (& ac init pwsh | Out-String)
+
+Config: %s
+`, Version, a.env.ConfigPath)
+}

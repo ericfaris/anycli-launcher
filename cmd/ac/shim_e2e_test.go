@@ -126,12 +126,14 @@ func runShim(t *testing.T, sc shellCase) {
 		t.Fatal(err)
 	}
 	log := filepath.Join(tmp, "fakecli.log")
+	hist := filepath.Join(tmp, "state", "frecency.json")
 
 	cmd := exec.Command(sc.argv[0], append(sc.argv[1:], sc.script)...)
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"AC_CONFIG="+cfgPath, "AC_PROJECTS_DIR=", "HOME="+home, "FAKECLI_LOG="+log, "TMPDIR="+tmp,
+		"AC_FRECENCY_FILE="+hist, // never touch the real history (Windows ignores HOME)
 	)
 	outB, err := cmd.CombinedOutput()
 	out := string(outB)
@@ -167,6 +169,10 @@ func runShim(t *testing.T, sc shellCase) {
 	}
 	if !strings.Contains(string(logB), "cwd=") || !same(strings.TrimPrefix(strings.Split(string(logB), "\n")[0], "cwd="), alpha) {
 		t.Errorf("CLI cwd: %s", logB)
+	}
+	// The launch was recorded for frecency.
+	if h, err := os.ReadFile(hist); err != nil || !strings.Contains(string(h), `"rank": 1`) {
+		t.Errorf("launch history not recorded: %v\n%s", err, h)
 	}
 	// The shim cleans up its temp files.
 	left, _ := filepath.Glob(filepath.Join(tmp, "ac-cd.*"))

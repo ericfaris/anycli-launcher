@@ -514,7 +514,7 @@ pick/version takes precedence over that subcommand.
 
 Shell integration (needed for ac to cd your shell):
   bash/zsh: eval "$(ac init bash)"     fish: ac init fish | source
-  pwsh:     Invoke-Expression (& ac init pwsh | Out-String)
+  pwsh:     Invoke-Expression (& (Get-Command ac -CommandType Application).Source init pwsh | Out-String)
 
 Config: %s
 `, Version, a.env.ConfigPath)

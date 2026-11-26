@@ -65,7 +65,7 @@ var shellCases = map[string]shellCase{
 ac alpha; echo "PWD=$PWD"
 ac zzz; echo "RC=$status"; echo "PWD2=$PWD"
 ac new beta </dev/null >/dev/null; echo "PWD3=$PWD"`},
-	"pwsh": {[]string{"pwsh", "-NoProfile", "-NonInteractive", "-Command"}, `Invoke-Expression (& ac init pwsh | Out-String)
+	"pwsh": {[]string{"pwsh", "-NoProfile", "-NonInteractive", "-Command"}, `Invoke-Expression (& (Get-Command ac -CommandType Application).Source init pwsh | Out-String)
 ac alpha; "PWD=$((Get-Location).Path)"
 ac zzz 2>$null; "RC=$LASTEXITCODE"; "PWD2=$((Get-Location).Path)"
 $null | ac new beta | Out-Null; "PWD3=$((Get-Location).Path)"`},

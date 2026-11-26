@@ -46,7 +46,7 @@ end
 
 // Windows PowerShell ships a built-in "ac" alias (Add-Content) that would
 // shadow the function, so it is removed first.
-const pwsh = `# anycli-launcher shell integration (pwsh). Install: Invoke-Expression (& ac init pwsh | Out-String)
+const pwsh = `# anycli-launcher shell integration (pwsh). Install: Invoke-Expression (& (Get-Command ac -CommandType Application).Source init pwsh | Out-String)
 Remove-Item -Path Alias:ac -Force -ErrorAction SilentlyContinue
 function ac {
     $__acExe = Get-Command -Name ac -CommandType Application -ErrorAction Stop | Select-Object -First 1

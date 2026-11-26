@@ -16,7 +16,7 @@ func TestScripts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(s, "--cd-file") || !strings.Contains(s, "ac init "+sh) {
+		if !strings.Contains(s, "--cd-file") || !strings.Contains(s, "init "+sh) {
 			t.Errorf("%s script incomplete:\n%s", sh, s)
 		}
 	}

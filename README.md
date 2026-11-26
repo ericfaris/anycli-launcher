@@ -89,20 +89,6 @@ source ~/projects/anycli-launcher/anycli-launcher.bash
 > rather than sourcing a WSL clone from Git Bash (the `//wsl.localhost/...` path
 > is slow and unreliable).
 
-> **Upgrading from kiro-launcher?** This project was renamed from
-> kiro-launcher to anycli (and later to anycli-launcher), and the `lk`
-> command is now `ac`. Re-clone under the new name, update your shell
-> config's `source .../anycli-launcher.bash` line, and move
-> `~/.config/kiro-launcher/` to `~/.config/anycli-launcher/` (or just re-run
-> `ac setup`).
-
-> **Upgrading from anycli?** This project was renamed from anycli to
-> **anycli-launcher** — the `ac` command is unchanged. Re-clone (or
-> `git remote set-url origin git@github.com:ericfaris/anycli-launcher.git`
-> in your existing clone), update your shell config's
-> `source .../anycli-launcher.bash` line, and move `~/.config/anycli/` to
-> `~/.config/anycli-launcher/` (or just re-run `ac setup`).
-
 ## First run
 
 The very first time you run `ac` with no config file yet, a short guided setup

@@ -55,10 +55,14 @@ func TestLaunchByName(t *testing.T) {
 	want := launch.Request{
 		Dir: filepath.Join(h.root, "ml-project"), Name: "claude",
 		Args:  []string{"--model", "opus", "--agent", "my agent", "help me with ML"},
-		Title: "ML Project", CDFile: h.cdFile,
+		Title: "ML Project", CDFile: h.cdFile, Session: "ml-project",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+	// A title makes auto pick a new tab (v3 behavior).
+	if !reflect.DeepEqual(h.backends, []string{"tab"}) {
+		t.Fatalf("backends %v", h.backends)
 	}
 	if h.cdTarget() != want.Dir {
 		t.Fatal("cd file")
@@ -115,7 +119,7 @@ func TestLaunchErrors(t *testing.T) {
 func TestLaunchNotFoundOnPath(t *testing.T) {
 	h := newHarness(t)
 	h.mkproj("alpha")
-	h.env.Launcher = nil // real Here backend
+	h.realBackends = true // real Here backend
 	h.onPath["claude"] = false
 	if code := h.run("alpha"); code != 127 || !strings.Contains(h.err.String(), "not found on PATH") {
 		t.Fatalf("code %d: %s", code, h.err.String())

@@ -37,9 +37,13 @@ type Env struct {
 	IsTTY    bool
 	LookPath func(string) (string, error)
 	// Run executes a helper command (git, gh) in dir and returns stdout.
-	Run      func(dir, name string, args ...string) (string, error)
-	Launcher launch.Backend
-	RunMenu  func(tui.Options) (tui.Result, error)
+	Run func(dir, name string, args ...string) (string, error)
+	// NewBackend builds a launch backend by name (default launch.New).
+	NewBackend func(name string, d launch.Deps) launch.Backend
+	// LaunchEnv is what terminal detection reads (zero value: the real
+	// environment, GOOS and /proc/version).
+	LaunchEnv launch.Environ
+	RunMenu   func(tui.Options) (tui.Result, error)
 	// Editor opens path for editing (ac config).
 	Editor func(path string) error
 	// FrecencyPath is the launch-history file (default frecency.DefaultPath()).
@@ -57,8 +61,10 @@ func DefaultRun(dir, name string, args ...string) (string, error) {
 }
 
 type app struct {
-	env       *Env
-	cdFile    string
+	env    *Env
+	cdFile string
+	// backend is the --backend override ("" = use config).
+	backend   string
 	cfg       config.Config
 	cfgExists bool
 	warns     []string
@@ -87,14 +93,24 @@ func Main(args []string, env *Env) int {
 	if a.env.Now == nil {
 		a.env.Now = time.Now
 	}
-	args, err := a.takeCDFile(args)
+	if a.env.NewBackend == nil {
+		a.env.NewBackend = launch.New
+	}
+	if len(args) > 0 && args[0] == launch.TabExecCommand {
+		// Trampoline inside a freshly opened tab: no config, no cd-file.
+		return launch.TabExec(args[1:], a.env.Stdout, a.env.Stderr)
+	}
+	args, err := a.takeGlobalFlags(args)
 	if err != nil {
 		return a.fail(2, err)
+	}
+	if a.backend != "" && !launch.ValidBackend(a.backend) {
+		return a.fail(2, fmt.Errorf("unknown backend %q (use %s)", a.backend, strings.Join(launch.Backends, ", ")))
 	}
 	return a.dispatch(args)
 }
 
-func (a *app) takeCDFile(args []string) ([]string, error) {
+func (a *app) takeGlobalFlags(args []string) ([]string, error) {
 	var out []string
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -106,6 +122,14 @@ func (a *app) takeCDFile(args []string) ([]string, error) {
 			i++
 		case strings.HasPrefix(args[i], "--cd-file="):
 			a.cdFile = strings.TrimPrefix(args[i], "--cd-file=")
+		case args[i] == "--backend":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--backend needs a name (%s)", strings.Join(launch.Backends, ", "))
+			}
+			a.backend = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--backend="):
+			a.backend = strings.TrimPrefix(args[i], "--backend=")
 		default:
 			out = append(out, args[i])
 		}
@@ -300,11 +324,16 @@ func (a *app) launchProject(p projects.Project, mode clis.Mode) int {
 	if p.OverlayErr != nil {
 		a.eprintf("ac: ignoring %s: %v\n", config.OverlayFile, p.OverlayErr)
 	}
-	return a.launchDir(p.Dir, p.Settings, mode)
+	session := p.Name
+	if p.Group != "" {
+		session = p.Group + "/" + p.Name
+	}
+	return a.launchDir(p.Dir, session, p.Settings, mode)
 }
 
-// launchDir launches the CLI in dir with the given settings.
-func (a *app) launchDir(dir string, s config.Project, mode clis.Mode) int {
+// launchDir launches the CLI in dir with the given settings. session names
+// the project for tmux/zellij.
+func (a *app) launchDir(dir, session string, s config.Project, mode clis.Mode) int {
 	cli := a.cfg.CLI
 	launchOverride := a.cfg.CLILaunch
 	if s.CLI != "" && s.CLI != cli {
@@ -321,11 +350,25 @@ func (a *app) launchDir(dir string, s config.Project, mode clis.Mode) int {
 	for _, n := range inv.Notes {
 		a.eprintf("  %s\n", n)
 	}
-	l := a.env.Launcher
-	if l == nil {
-		l = launch.Here{Stdin: a.env.Stdin, Stdout: a.env.Stdout, Stderr: a.env.Stderr, LookPath: a.env.LookPath}
+	color := s.Color
+	if !config.ValidColor(color) {
+		color = "" // doctor reports it; never pass junk to a terminal
 	}
-	code, err := l.Launch(launch.Request{Dir: dir, Name: cli, Args: inv.Args, Title: s.Title, CDFile: a.cdFile})
+	req := launch.Request{
+		Dir: dir, Name: cli, Args: inv.Args, Title: s.Title, CDFile: a.cdFile,
+		Color: color, Session: session, Resume: mode != clis.Fresh,
+	}
+	setting, explicit := a.backendSetting(s)
+	name := launch.Choose(setting, s.Color != "" || s.Title != "")
+	code, err := a.env.NewBackend(name, a.launchDeps()).Launch(req)
+	if errors.Is(err, launch.ErrUnavailable) && name != launch.BackendHere {
+		// v3 parity: no usable terminal means the current tab. Say so only
+		// when the backend was asked for by name.
+		if explicit {
+			a.eprintf("ac: %s backend unavailable (%s); launching here\n", name, unwrapUnavailable(err))
+		}
+		code, err = a.env.NewBackend(launch.BackendHere, a.launchDeps()).Launch(req)
+	}
 	if err != nil {
 		if errors.Is(err, launch.ErrNotFound) {
 			a.eprintf("ac: %v (configured cli %q); run 'ac doctor'\n", err, cli)
@@ -334,6 +377,86 @@ func (a *app) launchDir(dir string, s config.Project, mode clis.Mode) int {
 		return a.fail(code, err)
 	}
 	return code
+}
+
+// backendSetting is the backend asked for: --backend, else the project's,
+// else the global one. explicit is false when that resolves to auto.
+// Unknown names (config typos) act as auto, with a note.
+func (a *app) backendSetting(s config.Project) (setting string, explicit bool) {
+	setting = a.backend
+	if setting == "" {
+		setting = s.Backend
+	}
+	if setting == "" {
+		setting = a.cfg.Backend
+	}
+	if !launch.ValidBackend(setting) {
+		a.eprintf("ac: unknown backend %q in config; using auto\n", setting)
+		setting = launch.BackendAuto
+	}
+	if setting == "" {
+		setting = launch.BackendAuto
+	}
+	return setting, setting != launch.BackendAuto
+}
+
+func unwrapUnavailable(err error) string {
+	return strings.TrimPrefix(err.Error(), launch.ErrUnavailable.Error()+": ")
+}
+
+// launchDeps wires the outside world into the backends.
+func (a *app) launchDeps() launch.Deps {
+	term := a.cfg.Terminal
+	if !launch.ValidTerminal(term) {
+		term = ""
+	}
+	return launch.Deps{
+		Stdin: a.env.Stdin, Stdout: a.env.Stdout, Stderr: a.env.Stderr,
+		LookPath: a.env.LookPath, Env: a.env.LaunchEnv, Terminal: term, Now: a.env.Now,
+	}
+}
+
+// detectTerminal is the tab terminal a launch would use, and its program.
+func (a *app) detectTerminal() (launch.Detection, string) {
+	d := a.launchDeps()
+	wt := launch.FindWT(d.Env, d.LookPath)
+	det := launch.DetectTerminal(d.Env, d.Terminal, wt != "")
+	prog := wt
+	if det.Terminal != launch.TermWT {
+		prog = launch.FindTerminalProgram(det.Terminal, d.Env, d.LookPath)
+	}
+	return det, prog
+}
+
+// globalBackend is the menu-level setting: --backend, else config, else auto.
+func (a *app) globalBackend() string {
+	setting := a.backend
+	if setting == "" {
+		setting = a.cfg.Backend
+	}
+	if setting == "" || !launch.ValidBackend(setting) {
+		setting = launch.BackendAuto
+	}
+	return setting
+}
+
+// backendLabel is the header's backend: "here", "tmux", "auto: wt" (tabs
+// for projects with a color/title go to Windows Terminal), "tab: none".
+func (a *app) backendLabel() string {
+	setting := a.globalBackend()
+	switch setting {
+	case launch.BackendAuto, launch.BackendTab:
+		det, prog := a.detectTerminal()
+		target := det.Terminal.Label()
+		if det.Terminal == launch.TermNone || prog == "" {
+			target = "here"
+			if setting == launch.BackendTab {
+				target = "none"
+			}
+		}
+		return setting + ": " + target
+	}
+	return setting
 }
 
 // scores loads frecency scores; a missing or unreadable history is empty.
@@ -465,6 +588,7 @@ func (a *app) menu() int {
 			ShowGit:   a.cfg.ShowGitStatus,
 			CanResume: len(prof.Resume) > 0,
 			CanPick:   len(prof.Picker) > 0,
+			Backend:   a.backendLabel(),
 			Theme:     tui.NewTheme(a.cfg.Theme, nil),
 		})
 		if err != nil {
@@ -486,7 +610,8 @@ func (a *app) menu() int {
 			case tui.KindTerminal:
 				return a.cdOnly(res.Entry.Dir)
 			case tui.KindRoot, tui.KindConfig:
-				return a.launchDir(res.Entry.Dir, a.cfg.Settings(filepath.Base(res.Entry.Dir), nil), res.Mode)
+				base := filepath.Base(res.Entry.Dir)
+				return a.launchDir(res.Entry.Dir, base, a.cfg.Settings(base, nil), res.Mode)
 			default:
 				if p, ok := byDir(list, res.Entry.Dir); ok {
 					return a.launchProject(p, res.Mode)
@@ -535,6 +660,9 @@ Usage:
   ac <name>                launch directly in the matching project
   ac <name> -r|--resume    resume the project's most recent session
   ac <name> --resume-picker  pick a session to resume
+  ac --backend <b> <name>  launch via b: here, tab, tmux, zellij or auto
+                           (auto: a new tab when the project sets a color
+                           or title, else here)
   ac resume <name>         same as --resume
   ac pick <name>           same as --resume-picker
   ac list                  list projects (name, or name<TAB>label)

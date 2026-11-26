@@ -147,6 +147,9 @@ func (a *app) doctor() int {
 		r.warn("gh not on PATH", "only needed to delete GitHub repos in ac remove")
 	}
 
+	r.section("Launch backend")
+	a.doctorBackends(r)
+
 	a.printf("\n")
 	if r.fails == 0 {
 		a.printf("✓ Healthy")

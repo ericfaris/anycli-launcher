@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,14 @@ func (f *fakeLauncher) Launch(r launch.Request) (int, error) {
 	return f.code, f.err
 }
 
+// unavailable is a backend that can't run here (no terminal, no tmux).
+type unavailable struct{ reqs *[]launch.Request }
+
+func (u unavailable) Launch(r launch.Request) (int, error) {
+	*u.reqs = append(*u.reqs, r)
+	return 0, fmt.Errorf("%w: test says no", launch.ErrUnavailable)
+}
+
 type harness struct {
 	t        *testing.T
 	env      *Env
@@ -39,6 +48,16 @@ type harness struct {
 	cfgPath  string
 	cdFile   string
 	launcher *fakeLauncher
+	// backends records every backend name asked for, in order; deps the
+	// Deps of the last one. Names in unavail return ErrUnavailable. With
+	// realBackends set, launch.New builds the real thing.
+	backends     []string
+	deps         launch.Deps
+	unavail      map[string]bool
+	unavailReqs  []launch.Request
+	realBackends bool
+	// vars is the environment terminal detection sees.
+	vars     map[string]string
 	onPath   map[string]bool
 	ghCalls  [][]string
 	ghAuthOK bool
@@ -63,6 +82,8 @@ func newHarness(t *testing.T) *harness {
 		launcher: &fakeLauncher{},
 		onPath:   map[string]bool{"claude": true, "git": hasGit(), "gh": true},
 		ghAuthOK: true,
+		unavail:  map[string]bool{},
+		vars:     map[string]string{},
 		now:      time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC),
 	}
 	os.MkdirAll(h.root, 0o755)
@@ -94,7 +115,23 @@ func newHarness(t *testing.T) *harness {
 			}
 			return DefaultRun(dir, name, args...)
 		},
-		Launcher:     h.launcher,
+		NewBackend: func(name string, d launch.Deps) launch.Backend {
+			h.backends = append(h.backends, name)
+			h.deps = d
+			switch {
+			case h.realBackends:
+				return launch.New(name, d)
+			case h.unavail[name]:
+				return unavailable{&h.unavailReqs}
+			}
+			return h.launcher
+		},
+		LaunchEnv: launch.Environ{
+			GOOS:        "linux",
+			Getenv:      func(k string) string { return h.vars[k] },
+			ProcVersion: func() string { return "Linux version 6.1" },
+			Glob:        func(string) ([]string, error) { return nil, nil },
+		},
 		FrecencyPath: filepath.Join(home, ".local", "state", "anycli-launcher", "frecency.json"),
 		Now:          func() time.Time { return h.now },
 		RunMenu: func(o tui.Options) (tui.Result, error) {

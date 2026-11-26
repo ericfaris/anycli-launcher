@@ -11,7 +11,7 @@ no GNU/BSD tool differences. (v3, the bash version, lives on the `v3` branch.)
 ```
   ╭────────────────────────────────────╮
   │  anycli-launcher           v4.0.0  │
-  │  claude                            │
+  │  claude                  auto: wt  │
   ╰────────────────────────────────────╯
 
  ▸  1  ● terminal
@@ -83,6 +83,7 @@ dropped: tracked apps, show_sessions, and Windows Terminal theme names.
 | `ac <name>` | Launch in the matching project (see [Name matching](#name-matching)) |
 | `ac <name> -r` / `--resume`, `ac resume <name>` | Resume the most recent session |
 | `ac <name> --resume-picker`, `ac pick <name>` | Open the CLI's own session picker |
+| `ac --backend <b> <name>` | Launch through backend `b` this once: `here`, `tab`, `tmux`, `zellij`, `auto` (see [Backends](#backends)) |
 | `ac list` | List projects (`name` or `name<TAB>label`) |
 | `ac new [name]` | Create a folder in the root, `git init` it, optionally set alias/color/title/prompt, then cd there |
 | `ac remove <name>` | Delete a project folder (see below). Needs the exact name or label. |
@@ -188,14 +189,18 @@ default_flags = "--model opus"
 show_git_status = true         # branch, * when dirty, ↑ahead ↓behind
 theme = "default"              # default | mono | dusk
 sort_order = "name"            # name | recent (frecency, alias "frecent")
+backend = "auto"               # auto | here | tab | tmux | zellij (see Backends)
+terminal = ""                  # force the tab terminal: wt | iterm | terminal-app |
+                               #   kitty | wezterm | gnome-terminal ("" = detect)
 
 [projects.my-app]
 alias = "App"                  # menu label
 flags = "--agent reviewer"     # added to default_flags; "none" = no flags at all
-title = "My App"               # terminal title (set via OSC 0)
-color = "#00cc66"              # tab color (used by tab backends, coming later)
+title = "My App"               # tab/window title
+color = "#00cc66"              # tab color (Windows Terminal, iTerm2)
 prompt = "pick up where we left off"
 cli = "codex"                  # use a different CLI for this project
+backend = "tmux"               # this project's backend
 ```
 
 Flags are split like a shell would split them (quotes and backslashes), but
@@ -206,7 +211,60 @@ nothing is evaluated. `flags = ""` means "defaults only".
 A project can carry its own `.ac.toml` with the same keys as a
 `[projects.<name>]` table. Your `config.toml` entry overrides it field by
 field. Because it usually comes from a cloned repo, `cli` there must be a plain
-command name, not a path.
+command name, not a path, and `backend` must be one of the fixed names above
+(a repo can ask for tmux, never for a command). `terminal` is global only.
+
+### Backends
+
+| Backend | What happens | Your shell afterwards |
+|---|---|---|
+| `here` | Runs the CLI in this terminal (phase 1-2 behavior) | cd'd to the project |
+| `tab` | Opens a new tab in your terminal and runs the CLI there | stays where it was |
+| `tmux` | One session per project: created, or re-attached if it exists | cd'd to the project (when not already inside tmux) |
+| `zellij` | Same idea with zellij | cd'd to the project |
+| `auto` (default) | `tab` when the project sets a `color` or `title` (v3's behavior), else `here` | |
+
+Precedence: `--backend`, then the project's `backend` (`config.toml` over
+`.ac.toml`), then the global `backend`, then `auto`. When a backend can't run
+(no supported terminal, tmux not installed), `ac` launches here instead. It
+says so unless the backend came from `auto`. The menu header shows the active
+backend (`auto: wt` means "tabs go to Windows Terminal"). `ac doctor` lists
+what it detected.
+
+**Tabs.** The terminal is detected from the variables it sets:
+`WEZTERM_PANE`, `KITTY_WINDOW_ID`, `TERM_PROGRAM` (iTerm2, Terminal.app),
+`WT_SESSION`, `GNOME_TERMINAL_SCREEN`. On WSL and Windows, Windows Terminal is
+used when `wt.exe` exists, as in v3.
+
+| Terminal | Command | Title | Color |
+|---|---|---|---|
+| Windows Terminal (WSL) | `wt.exe -w 0 new-tab --title T --tabColor C wsl.exe -d $WSL_DISTRO_NAME --cd <dir> --exec ac __tab-exec <spec>` | yes | yes |
+| Windows Terminal (Windows, Git Bash) | `wt.exe -w 0 new-tab ... -d <dir> -- ac.exe __tab-exec <spec>` | yes | yes |
+| iTerm2 | `osascript`: new tab, `write text "exec ac __tab-exec <spec>"` | yes | yes (iTerm2 escape) |
+| Terminal.app | `osascript`: `do script` (a new window: tabs need Accessibility) | yes | no |
+| kitty | `kitty @ launch --type=tab --cwd <dir> --tab-title T ...` (needs `allow_remote_control`) | yes | no |
+| WezTerm | `wezterm cli spawn --cwd <dir> -- ...` | yes | no |
+| GNOME Terminal | `gnome-terminal --tab --working-directory=<dir> -- ...` | yes | no |
+
+In every case the new tab runs `ac __tab-exec <spec>`: `ac` itself, reading a
+private temp file with the directory, the CLI's argv, the title and the color.
+It deletes the file, cds, sets the title, discards stray terminal replies
+(the `2c/3434` junk v3 also drained), and execs the CLI. The CLI path is
+resolved before the tab opens, so a shell alias with the CLI's name doesn't
+matter. On Unix, tabs except iTerm2/Terminal.app first pass through `bash -l`,
+so the CLI sees your login environment (PATH, nvm, API keys), as in v3.
+Project names, prompts and flags travel only in that file, never through a
+shell, wt.exe's `;` parsing, the WSL interop layer or AppleScript.
+
+**tmux.** The session is named after the project (`work/api` becomes
+`work_api-<hash>`; only letters, digits, `_` and `-` are kept). A new session
+runs the CLI. If the session exists, a fresh launch opens another window in
+it, and `--resume`/`r<N>` just re-attaches. Inside tmux, `ac` switches the
+client instead of nesting. Titles become window names. tmux has no tab color.
+
+**zellij.** Same model, through a generated layout. Inside zellij the CLI
+opens as a new tab in the current session. The zellij flags are not yet
+verified against a real zellij (`ac doctor` says so).
 
 ### CLI profiles
 
@@ -235,8 +293,10 @@ No local Go? Use Docker:
 
 CI (`.github/workflows/go.yml`) runs `go test` on Linux, macOS and Windows, and
 the shim smoke test in bash and zsh (Linux, plus macOS's bash 3.2) and pwsh
-(Windows). The plan for later releases (new-tab and tmux
-backends, worktree agents, packaging) is in `docs/V4-PLAN.md`.
+(Windows). `TestTmuxIntegration` drives a real tmux on a private socket when
+tmux is installed, and `TestTabBackendE2E` runs a whole tab launch through a
+fake terminal. The plan for later releases (worktree agents, packaging) is in
+`docs/V4-PLAN.md`.
 
 Tests never touch your real history: the app tests pass
 `Env.FrecencyPath`, and the shim e2e test sets `AC_FRECENCY_FILE`.

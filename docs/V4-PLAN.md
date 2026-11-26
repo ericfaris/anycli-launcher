@@ -31,7 +31,7 @@ binary plus a tiny shell shim. No bash-4, zsh-shim, BSD/GNU or Git Bash problems
 ## Phases
 1. Core: config, projects, clis, launch(here), tui, shim, migrate, tests, CI.
 2. D: filter + frecency + `ac <partial>`.
-3. E: tab backends + tmux/zellij.
+3. E: tab backends + tmux/zellij (branch `v4-phase3`; tab via the `ac __tab-exec` trampoline).
 4. F: worktree agents + running view.
 5. goreleaser, Homebrew tap, scoop, install.sh.
 

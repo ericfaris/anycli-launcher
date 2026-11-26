@@ -59,3 +59,20 @@
   location must accept either.
 - CI's push trigger listed only `main`/`v4`, so a feature branch got no run
   until `v4-*` was added.
+
+## 2026-11-26: v4 phase 3 (backends)
+
+- **tmux expands `-c` and `-n` as formats**, so a project dir or title with
+  `#(cmd)` runs cmd, and `#{...}` gets substituted (a bad `-c` silently falls
+  back to `$HOME`). Escape `#` as `##`. shell-command argv is *not* expanded,
+  but a single-element argv goes through `sh -c`, so shell-quote it. Found by
+  probing real tmux 3.4; the integration test locks it in.
+- **Don't put user data on a terminal's command line.** wt.exe splits on `;`,
+  WSL interop re-quotes args for a Windows command line, AppleScript and
+  `write text` need their own quoting. Instead, the tab runs `ac __tab-exec
+  <spec>` and the data goes in a JSON file. Only two vetted paths cross those
+  layers.
+- **A fake terminal makes the tab path e2e-testable**: the test binary
+  plays `kitty` and runs the trampoline the way a terminal would. That covers
+  the spec file, login re-exec, cd and exec without a GUI.
+- `gofmt` turns `''` in a doc comment into `”`.

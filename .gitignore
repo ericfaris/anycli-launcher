@@ -3,6 +3,9 @@
 tests/.mock-bin/
 tests/.test.log
 
+# go build output
+dist/
+
 # Windows NTFS marks a file downloaded from the internet (e.g. via a browser
 # zip download) with a same-named ":Zone.Identifier" alternate-data-stream
 # companion. They carry no content, and their literal colon makes Git for

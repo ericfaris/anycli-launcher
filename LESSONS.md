@@ -18,3 +18,22 @@
   work; call the function in the current shell to populate it.
 - **WSL hides branches.** `/proc/version` says microsoft locally (Docker too,
   since it shares the kernel), so non-WSL Linux paths only run in CI.
+
+## 2026-11-26: v4 phase 1 (Go rewrite)
+
+- **Bubble Tea v1 queries the terminal in `init()`** (OSC 11 + `ESC[6n`, 5s
+  termenv timeout) for every process that imports it. That is harmless in real
+  terminals, but a pty harness that doesn't answer looks like a hang. Drive the
+  binary with a 6s+ settle, or test the model directly (goldens).
+- **Golden TUI tests need a fixed color profile**: build themes on
+  `lipgloss.NewRenderer(io.Discard)` + `SetColorProfile(termenv.Ascii|TrueColor)`,
+  never the default renderer. `.gitattributes` keeps `*.golden` LF on Windows.
+- **One test binary, many roles**: `cmd/ac` TestMain dispatches on
+  `os.Args[0]` (copied to `bin/ac` and `bin/fakecli`), so the shim e2e test
+  needs no `go build` and records the CLI's real cwd/argv.
+- **Remove guards**: Go's `os.RemoveAll` on a symlink unlinks it, but
+  `removeDir` checks `Lstat` explicitly anyway. A regression test asserts that
+  the symlink target survives.
+- **Local `~/.local/go` was broken** by extracting 1.27.4 over an older tree,
+  which left stale `src/internal/strconv` files. Always `rm -rf` the old GOROOT
+  before extracting.

@@ -9,6 +9,7 @@ package main
 // (as CI does) to fail instead of skip when a shell is missing.
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -26,8 +27,15 @@ func TestMain(m *testing.M) {
 	case "ac":
 		main()
 		return
+	case "kitty":
+		fakeTerminal()
+		return
 	case "fakecli":
 		wd, _ := os.Getwd()
+		if log := os.Getenv("FAKECLI_JSON"); log != "" {
+			rec, _ := json.Marshal(map[string]any{"cwd": wd, "args": os.Args[1:], "spawned": os.Getenv("_AC_SPAWNED_TAB")})
+			os.WriteFile(log, rec, 0o644)
+		}
 		if log := os.Getenv("FAKECLI_LOG"); log != "" {
 			os.WriteFile(log, []byte(fmt.Sprintf("cwd=%s\nargs=%s\n", wd, strings.Join(os.Args[1:], "|"))), 0o644)
 		}

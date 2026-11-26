@@ -43,7 +43,7 @@ change your shell's directory:
 | bash | `~/.bashrc` | `eval "$(ac init bash)"` |
 | zsh | `~/.zshrc` | `eval "$(ac init zsh)"` |
 | fish | `~/.config/fish/config.fish` | `ac init fish \| source` |
-| PowerShell | `$PROFILE` | `Invoke-Expression (& (Get-Command ac -CommandType Application).Source init pwsh \| Out-String)` |
+| PowerShell | `$PROFILE` | `Invoke-Expression (& (Get-Command ac -CommandType Application | Select-Object -First 1).Source init pwsh \| Out-String)` |
 
 How it works: the `ac` function runs the binary with `--cd-file <tmp>`. When
 you pick a project, the binary writes its path to that file, runs your CLI

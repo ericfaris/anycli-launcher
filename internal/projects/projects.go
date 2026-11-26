@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/internal/frecency"
+	"github.com/ericfaris/anycli-launcher/internal/fuzzy"
 )
 
 // Project is one launchable directory.
@@ -106,14 +108,26 @@ func Names(list []Project) []string {
 }
 
 // Resolve matches query against name, alias and label, trying exact,
-// case-insensitive exact, case-insensitive prefix, then substring; the first
-// tier with any match wins. One result means resolved; more is ambiguous.
+// case-insensitive exact, case-insensitive prefix, substring, then fuzzy
+// subsequence; the first tier with any match wins. One result means
+// resolved; more is ambiguous.
 func Resolve(list []Project, query string) []Project {
+	return ResolveRanked(list, query, nil)
+}
+
+// ResolveRanked is Resolve with launch history. Exact and
+// case-insensitive-exact matches always win as in Resolve. When the winning
+// tier is prefix, substring or fuzzy and has several matches, the one with
+// the strictly highest frecency score (scores keyed by Dir, see
+// internal/frecency) is returned alone. Otherwise the ambiguous matches come
+// back ordered by score, then (for fuzzy) match quality, then list order.
+func ResolveRanked(list []Project, query string, scores map[string]float64) []Project {
 	if query == "" {
 		return nil
 	}
 	q := strings.ToLower(query)
-	var tiers [4][]Project
+	var tiers [5][]Project
+	fz := map[string]int{}
 	for _, p := range list {
 		cands := []string{p.Name, p.Label()}
 		if p.Settings.Alias != "" {
@@ -132,6 +146,13 @@ func Resolve(list []Project, query string) []Project {
 				t = 2
 			case strings.Contains(lc, q):
 				t = 3
+			default:
+				if s, _, ok := fuzzy.Match(query, c); ok {
+					t = 4
+					if old, seen := fz[p.Dir]; !seen || s > old {
+						fz[p.Dir] = s
+					}
+				}
 			}
 			if t >= 0 && (tier < 0 || t < tier) {
 				tier = t
@@ -141,12 +162,37 @@ func Resolve(list []Project, query string) []Project {
 			tiers[tier] = append(tiers[tier], p)
 		}
 	}
-	for _, t := range tiers {
-		if len(t) > 0 {
+	for i, t := range tiers {
+		if len(t) == 0 {
+			continue
+		}
+		if i < 2 || len(t) == 1 {
 			return t
 		}
+		score := func(p Project) float64 { return frecency.Lookup(scores, p.Dir) }
+		sort.SliceStable(t, func(a, b int) bool {
+			if sa, sb := score(t[a]), score(t[b]); sa != sb {
+				return sa > sb
+			}
+			return i == 4 && fz[t[a].Dir] > fz[t[b].Dir]
+		})
+		if s := score(t[0]); s > 0 && s > score(t[1]) {
+			return t[:1]
+		}
+		return t
 	}
 	return nil
+}
+
+// SortByFrecency orders list by frecency score (highest first). Equal
+// scores, including never-launched projects, keep their order in list,
+// which is the name order Discover produces.
+func SortByFrecency(list []Project, scores map[string]float64) []Project {
+	out := append([]Project(nil), list...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return frecency.Lookup(scores, out[i].Dir) > frecency.Lookup(scores, out[j].Dir)
+	})
+	return out
 }
 
 // ExactExists reports whether a project's name or alias equals query, so a

@@ -184,3 +184,92 @@ func TestGitStatus(t *testing.T) {
 		t.Fatalf("GitAll: %+v", all)
 	}
 }
+
+func TestResolveFuzzyTier(t *testing.T) {
+	list := []Project{{Name: "anycli-launcher", Dir: "/p/a"}, {Name: "ansible", Dir: "/p/b"}, {Name: "beta", Dir: "/p/c"}}
+	if got := Resolve(list, "acl"); len(got) != 1 || got[0].Name != "anycli-launcher" {
+		t.Fatalf("acl: %v", got)
+	}
+	// Substring still beats fuzzy: "be" is in beta, and fuzzy-only elsewhere.
+	if got := Resolve(list, "be"); len(got) != 1 || got[0].Name != "beta" {
+		t.Fatalf("be: %v", got)
+	}
+	if got := Resolve(list, "zq"); got != nil {
+		t.Fatalf("zq: %v", got)
+	}
+}
+
+// sc builds a scores map keyed the way frecency keys it (cleaned paths).
+func sc(kv ...any) map[string]float64 {
+	m := map[string]float64{}
+	for i := 0; i < len(kv); i += 2 {
+		m[filepath.Clean(kv[i].(string))] = kv[i+1].(float64)
+	}
+	return m
+}
+
+func TestResolveRanked(t *testing.T) {
+	list := []Project{
+		{Name: "my-app", Dir: "/p/my-app"},
+		{Name: "my-api", Dir: "/p/my-api"},
+		{Name: "API", Group: "work", Dir: "/p/work/API"},
+		{Name: "api", Group: "personal", Dir: "/p/personal/api"},
+		{Name: "rapid", Dir: "/p/rapid"},
+		{Name: "mapper", Dir: "/p/mapper"},
+	}
+	labels := func(ps []Project) []string {
+		var out []string
+		for _, p := range ps {
+			out = append(out, p.Label())
+		}
+		return out
+	}
+	cases := []struct {
+		name   string
+		query  string
+		scores map[string]float64
+		want   []string
+	}{
+		// Phase 1 behavior without history.
+		{"no history ambiguous", "my", nil, []string{"my-app", "my-api"}},
+		// Frecency breaks a prefix tie.
+		{"prefix tie", "my", sc("/p/my-api", 4.0), []string{"my-api"}},
+		// Equal scores stay ambiguous, in list order.
+		{"equal scores", "my", sc("/p/my-app", 2.0, "/p/my-api", 2.0), []string{"my-app", "my-api"}},
+		// Ambiguous results are ordered by score.
+		{"ordered", "pi", sc("/p/rapid", 2.0, "/p/personal/api", 2.0), []string{"personal/api", "rapid", "my-api", "work/API"}},
+		// Exact always wins, even against a frecent substring match.
+		{"exact wins", "api", sc("/p/rapid", 100.0), []string{"personal/api"}},
+		// Case-insensitive exact ties stay ambiguous (no frecency there).
+		{"ci exact", "Api", sc("/p/work/API", 100.0), []string{"work/API", "personal/api"}},
+		// A prefix match still beats a more frecent substring match.
+		{"tier before frecency", "rap", sc("/p/mapper", 50.0), []string{"rapid"}},
+		// Substring tie broken by frecency.
+		{"substring tie", "pp", sc("/p/mapper", 1.0), []string{"mapper"}},
+		// Fuzzy tie broken by frecency.
+		{"fuzzy frecency", "mpr", sc("/p/mapper", 0.25), []string{"mapper"}},
+	}
+	for _, c := range cases {
+		if got := labels(ResolveRanked(list, c.query, c.scores)); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %q got %v want %v", c.name, c.query, got, c.want)
+		}
+	}
+}
+
+func TestSortByFrecency(t *testing.T) {
+	list := []Project{{Name: "a", Dir: "/p/a"}, {Name: "b", Dir: "/p/b"}, {Name: "c", Dir: "/p/c"}, {Name: "d", Dir: "/p/d"}}
+	got := SortByFrecency(list, sc("/p/c", 8.0, "/p/b", 1.0, "/p/d", 1.0))
+	var names []string
+	for _, p := range got {
+		names = append(names, p.Name)
+	}
+	if !reflect.DeepEqual(names, []string{"c", "b", "d", "a"}) {
+		t.Fatalf("got %v", names)
+	}
+	if list[0].Name != "a" {
+		t.Fatal("input must not be reordered")
+	}
+	if got := SortByFrecency(list, nil); !reflect.DeepEqual(got, list) {
+		t.Fatal("no history keeps name order")
+	}
+}

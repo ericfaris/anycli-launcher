@@ -99,3 +99,22 @@
   phase 1-3 goldens stayed byte-identical (only the help goldens changed).
 - **Isolate git in tests**: `GIT_CONFIG_GLOBAL` to a temp file plus
   `GIT_CONFIG_NOSYSTEM=1`, or a dev box's `commit.gpgsign` breaks them.
+
+## 2026-11-26: v4 phase 5 (release tooling)
+
+- **goreleaser 2.19+ deprecates `brews` and `hooks.post.install`.** Use
+  `homebrew_casks` (it emits on_macos and on_linux blocks) and
+  `hooks.post.install_steps` with the declarative `run` DSL (`{{ .StagedPath }}`).
+  `goreleaser check` exits non-zero on a deprecated key, so CI catches it.
+- **Optional secrets in goreleaser templates:** `{{ .Env.X }}` fails when X is
+  unset; `{{ index .Env "X" }}` gives "". Gate `skip_upload` on it so a
+  release without the tap token still publishes.
+- **Version-less archive names** let the install scripts use
+  `releases/latest/download/<asset>` with no GitHub API call or redirect parsing.
+- **Test installers without the network:** serve a fake release from
+  `httptest` and put a fake `uname` first on PATH, which covers every OS/arch
+  branch from one host. A PATH of symlinks without sha256 tools proves the
+  fail-closed path.
+- **`irm | iex` runs in the caller's session:** `exit` in install.ps1 would
+  close the user's PowerShell. Throw instead (`-File` still exits 1).
+- A `/vN` module suffix is required for `go install ...@latest` to see vN tags.

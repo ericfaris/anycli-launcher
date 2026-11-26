@@ -1,7 +1,7 @@
 # Handoff: anycli-launcher
 
 **What:** `ac` picks a project, cds into it, and launches an AI CLI.
-- v4: Go rewrite on branch `v4` (phases 1-3: core, frecency, filter, backends). Phase 4 (task worktrees + running view) is on branch `v4-phase4`, pushed and not yet merged into `v4`. See `docs/V4-PLAN.md`.
+- v4: Go rewrite on branch `v4` (phases 1-4: core, frecency, filter, backends, task worktrees). Phase 5 (release tooling) is on branch `v4-phase5`, pushed and not merged into `v4`. See `docs/V4-PLAN.md`.
 - v3: 5k-line bash (`anycli-launcher.bash`), on branch `v3` and still on `main` until v4 lands. The v3 files are still in the v4 tree; delete them at cutover.
 
 ## Layout (v4)
@@ -21,6 +21,8 @@
   - `attach.go`: `PlanAttach`/`Attach` (attach-only, for opening a live task session). `Request.PIDFile`: Here writes the child's pid, the tab trampoline its own (just before exec).
 - `internal/worktree` (phase 4): `slug.go` (Slug, SafeComponent, Unique, ValidBranch: only `ac/[a-z0-9-]`), `git.go` (argv-only git: TopLevel, ResolveBase, Add, List/Find by SameFile, Remove, DeleteBranch, Prune, Status, Version), `guard.go` (CheckPath: inside worktree_dir lexically and resolved, not a symlink; CheckRoot), `registry.go` (tasks.json: atomic, lock file, corrupt file set aside as `.corrupt-<unix>`, junk ids dropped), `live.go` + `proc_*.go` (Probe: tmux has-session + window_activity for idle, zellij list-sessions, pid alive + Linux /proc cwd check).
 - `internal/app`: `task.go` (startTask), `running.go` (ac running, openTask, finish, prune), `doctor_tasks.go`. `launchDirWith` + `launchHook` record the backend actually used (fallback included) before the CLI starts.
+- `internal/buildinfo` (phase 5): `Get()` = version/commit/date from goreleaser's `-X .../internal/buildinfo.{version,commit,date}`, else the `go install` module version + VCS stamp, else `4.0.0-dev`. `Detect(Host)` guesses the install method from the binary's resolved path (Cellar/Caskroom, scoop apps, GOBIN/GOPATH/bin, `~/.local/bin` or `AC_INSTALL_DIR`, `%LOCALAPPDATA%\Programs\anycli-launcher`); `UpdateHint` prints that method's command, or all of them. No network. Used by `ac --version` and the doctor's Version section (`Env.Install` is the test seam).
+- Release tooling (phase 5): `.goreleaser.yaml`, `.github/workflows/release.yml` (tag `v*` only), `install.sh` (POSIX sh), `install.ps1`. `internal/release` has only tests: both scripts against a fake release on httptest (fake `uname` covers every OS/arch), plus a cross-file agreement test (ldflags symbols, archive names, skip_upload guards, workflow pins).
 - `internal/tui/running.go`: the `w` view (`Options.TaskCount`, `Options.LoadTasks` runs async; `ActTaskOpen`/`ActTaskFinish` + `Result.Task`).
 
 ## Commands
@@ -31,27 +33,41 @@
 - Local Go: `PATH=$HOME/.local/go/bin:$PATH` (1.27.4). Docker fallback:
   `docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.27.4 go test ./...`
   (add `--user $(id -u):$(id -g) -e HOME=/tmp` to avoid root-owned files).
-- CI: `.github/workflows/go.yml` (go test on 3 OSes, plus the shim smoke job). It runs on pushes to `main`, `v4` and `v4-*`, and on PRs. The v3 `cross-platform-tests.yml` still runs on main.
+- Release dry run (goreleaser v2.20.3, not in the repo; get it from its GitHub release into a scratch dir): `goreleaser check` and `goreleaser release --snapshot --clean --skip=sign,sbom` (archives, cask and scoop manifest in `dist/`). Install from it: copy `dist/*.tar.gz dist/*.zip dist/checksums.txt` to `<d>/latest/download/`, then `AC_RELEASES_URL=file://<d> sh install.sh --dir <bin>`.
+- Install-script tests: `go test ./internal/release` (sh on Unix, ps1 on Windows). `shellcheck -s sh install.sh` (0.11.0, same as CI).
+- CI: `.github/workflows/go.yml` (go test on 3 OSes, the shim smoke job, and `release-check`: shellcheck, goreleaser check + snapshot, install.sh from the snapshot under dash and bash). It runs on pushes to `main`, `v4` and `v4-*`, and on PRs. The v3 `cross-platform-tests.yml` still runs on main.
 
 ## Open items (priority)
-1. Merge `v4-phase4` into `v4` once CI is green.
-2. Manual checks for phase 4 on a real terminal:
+1. Merge `v4-phase5` into `v4` once CI is green.
+2. **One-time manual setup before the first release (owner only; nothing here was created by automation):**
+   1. Create the public repo `ericfaris/homebrew-tap` with a `main` branch (an initial README commit is enough; goreleaser writes `Casks/anycli-launcher.rb`).
+   2. Create the public repo `ericfaris/scoop-bucket` with a `main` branch (goreleaser writes `anycli-launcher.json` at the root).
+   3. Mint a fine-grained PAT: resource owner `ericfaris`, only those two repos, permission Contents: read and write (nothing else), an expiry you'll remember.
+   4. Add it to `ericfaris/anycli-launcher` as the Actions secret `TAP_GITHUB_TOKEN` (`gh secret set TAP_GITHUB_TOKEN -R ericfaris/anycli-launcher`, paste at the prompt). Without it, releases still publish to GitHub; the cask/scoop steps are skipped with a notice.
+   5. Check Settings -> Actions -> General -> Workflow permissions doesn't block `contents: write` for the workflow (the job requests it explicitly).
+3. **Cutover checklist (a separate decision; do in order):**
+   1. Merge `v4` into `main` (PR, CI green on all three OSes).
+   2. In the same or a follow-up PR on `main`: delete `anycli-launcher.bash`, `tests/`, `.shellcheckrc` (only used by the v3 suite), `VERSION` (v4 versions come from tags), and `.github/workflows/cross-platform-tests.yml`. Drop the `tests/.mock-bin/`/`tests/.test.log` lines from `.gitignore`. Grep README/docs for `anycli-launcher.bash`.
+   3. Tag on `main`: `git tag -a v4.0.0 -m "v4.0.0" && git push origin v4.0.0`. Watch `release.yml`; the release notes come from the `## 4.0.0` section of CHANGELOG.md.
+   4. Verify: `brew install --cask ericfaris/tap/anycli-launcher` (macOS + Linux), `scoop bucket add ericfaris https://github.com/ericfaris/scoop-bucket && scoop install anycli-launcher`, `curl -fsSL https://github.com/ericfaris/anycli-launcher/releases/latest/download/install.sh | sh`, `irm .../install.ps1 | iex`, `go install github.com/ericfaris/anycli-launcher/v4/cmd/ac@latest` (the proxy may lag a few minutes), and `cosign verify-blob` per README. On macOS check Gatekeeper doesn't block the cask's `ac` (the postflight strips quarantine).
+   5. Close issue #10 (macOS v3 failures) as obsolete with v3 retired, and mention the `v3` branch for anyone who needs it.
+4. Manual checks for phase 4 on a real terminal:
    - `ac <p> --task "..."` with backend tmux: attach, `w` shows running, leave it quiet 10 min -> idle, Enter from the view re-attaches (and switch-client from inside tmux).
    - zellij task: `list-sessions` parsing (EXITED marker), attach from the view.
    - tab task (WT from WSL, iTerm2, kitty): the pid file appears and status goes running -> finished when the CLI exits. On native Windows the pid is the trampoline's.
    - `ac finish` on a dirty worktree with a live tmux session (prints the kill-session hint, does not kill it).
-3. Manual checks on real terminals (only unit/e2e-tested with fakes):
+5. Manual checks on real terminals (only unit/e2e-tested with fakes):
    - Windows Terminal from WSL: `wsl.exe ... --cd <dir> --exec ac __tab-exec <spec>` (v3 used `-- bash -l script`), title, tab color, the TTY drain (no `2c/3434` junk), `-w 0` landing in the current window, dirs with spaces.
    - Windows Terminal native/Git Bash: `-d <dir> -- ac.exe __tab-exec <spec>` with spaces in the user profile path; a `.cmd` CLI shim (npm `claude.cmd`) run by the trampoline.
    - iTerm2 (new tab + `write text`, OSC 6 tab color), Terminal.app (opens a window), kitty (`allow_remote_control`), WezTerm, GNOME Terminal (`--tab` against the running server).
    - zellij: every flag (not installed when written).
    - tmux: real attach/switch-client in a terminal (the integration test stubs only those two calls).
-4. Verify the codex/goose/aider/amp profiles against a real `--help` (only claude is verified).
-5. Phase 5 per plan. Delete the v3 bash files at cutover.
-6. Issue #10 (macOS v3 failures): fix only on `v3`, if at all.
+6. Verify the codex/goose/aider/amp profiles against a real `--help` (only claude is verified).
+7. Not testable without a real release: the cask on Linuxbrew, the scoop shim (`os.Executable` should resolve to `scoop\apps\...` so the update hint says scoop), cosign verification of a real bundle, and `go install .../v4/cmd/ac@v4.0.0` reporting `4.0.0` from the module version.
 
 ## Decisions that may be revisited
 - Go over modular bash; TOML over YAML; self-update, theme editor and changelog viewer dropped.
+- Phase 5 release: Homebrew **cask** (goreleaser deprecated `brews` formulae; the cask covers macOS and Linux and strips quarantine in `postflight_steps` since the binaries aren't notarized). Archive names carry no version (`anycli-launcher_<os>_<arch>`), so the scripts and `releases/latest/download/` need no API call. `install.sh`/`install.ps1` ship as release assets; update hints point at `releases/latest/download/install.sh`, not at `main`. One `TAP_GITHUB_TOKEN` for both tap and bucket. Release notes come from CHANGELOG.md's `## <version>` section when present, else goreleaser's grouped changelog. Module path has the `/v4` suffix (required for `go install ...@latest` to see v4 tags).
 - User `config.toml` overrides `.ac.toml` field by field. Overlay `cli` must be a bare command name, and overlay `backend` one of the fixed names (an invalid one rejects the whole overlay, like a bad `cli`). `terminal` is global only.
 - `auto` (default) = tab when the project has color or title, else here (v3). An unavailable backend falls back to here: silently for auto, with a note when named.
 - Tabs run `ac __tab-exec <spec>` instead of v3's generated bash script: user data travels as JSON in a 0600 temp file, never on a terminal command line. Only the ac path and spec path go there, and on Unix they must match `SafePath` (else tab is unavailable and ac runs here). Stale specs (>24h) are swept.
@@ -80,4 +96,7 @@
 - Compare paths git prints with `os.SameFile`, not strings: git resolves symlinks (macOS `/private/var`) and Windows 8.3 names, and uses `/`.
 - Git tests must isolate config: `GIT_CONFIG_GLOBAL=<temp file>`, `GIT_CONFIG_NOSYSTEM=1` (a dev box with `commit.gpgsign` breaks them otherwise).
 - This agent sandbox refuses Bash commands that mention git alongside other complex shell (heredocs, `&&` chains with python); run git commands on their own.
+- `-X` with a wrong symbol path is a silent no-op: `TestReleaseLdflags` (cmd/ac) builds with goreleaser's flags and checks the output.
+- `install.ps1` must `throw`, never `exit`: under `irm | iex` exit closes the user's PowerShell.
+- goreleaser `skip_upload`/`token` use `{{ index .Env "TAP_GITHUB_TOKEN" }}`: `.Env.X` errors when unset; `index` yields "".
 - See `LESSONS.md` for CI history.

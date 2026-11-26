@@ -33,7 +33,7 @@ binary plus a tiny shell shim. No bash-4, zsh-shim, BSD/GNU or Git Bash problems
 2. D: filter + frecency + `ac <partial>`.
 3. E: tab backends + tmux/zellij (branch `v4-phase3`; tab via the `ac __tab-exec` trampoline).
 4. F: worktree agents + running view (branch `v4-phase4`: `ac <p> --task`, `ac running`/`w`, `ac finish`, `ac prune`).
-5. goreleaser, Homebrew tap, scoop, install.sh.
+5. Release tooling (branch `v4-phase5`): goreleaser (cask + scoop + cosign + SBOM), tag-only release workflow, install.sh/install.ps1, offline update hints. No self-update.
 
 ## Testing
 Table tests per package; golden-file TUI frames; e2e shim smoke test per shell;

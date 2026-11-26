@@ -76,3 +76,26 @@
   plays `kitty` and runs the trampoline the way a terminal would. That covers
   the spec file, login re-exec, cd and exec without a GUI.
 - `gofmt` turns `''` in a doc comment into `”`.
+
+## 2026-11-26: v4 phase 4 (task worktrees + running view)
+
+- **Match git's paths by file identity.** `git rev-parse --show-toplevel` and
+  `worktree list` print paths with symlinks resolved, long Windows names and
+  `/`. Comparing strings against `t.TempDir()` breaks on macOS
+  (`/private/var`) and Windows (8.3 names). `os.SameFile` (and walking up
+  with it to get a subdir) works everywhere; CI was green on all three OSes
+  on the first run.
+- **Deleting through git, not the filesystem**: finish only calls `git
+  worktree remove`, after checking the path is inside worktree_dir (as
+  written and resolved, not a symlink) and in `git worktree list`. git
+  refuses non-worktrees on its own, which the tests also lock in.
+- **Liveness without lying**: the pid file is written by whoever runs the
+  CLI (Here after Start, the tab trampoline right before exec, so on Unix it
+  is the CLI's own pid). A live pid whose `/proc/<pid>/cwd` is outside the
+  worktree is a reused pid, so "finished". No pid file means "unknown".
+- **Adding a key over type-to-filter**: binding `w` broke "type `web` to
+  filter". Falling back to the filter when the first key after `w` is a
+  non-view letter kept it, and the footer hint only shows with tasks, so the
+  phase 1-3 goldens stayed byte-identical (only the help goldens changed).
+- **Isolate git in tests**: `GIT_CONFIG_GLOBAL` to a temp file plus
+  `GIT_CONFIG_NOSYSTEM=1`, or a dev box's `commit.gpgsign` breaks them.

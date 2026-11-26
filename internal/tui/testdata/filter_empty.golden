@@ -1,0 +1,23 @@
+
+  ╭────────────────────────────────────╮
+  │  anycli-launcher           v4.0.0  │
+  │  claude                            │
+  ╰────────────────────────────────────╯
+
+ ▸  1  ● terminal
+    2  ● projects (root)
+    3  ● .claude (config)
+    4  alpha
+    5  ML
+    6  work/api
+    7  gamma
+    8  delta
+    9  epsilon
+   10  zeta
+   11  eta
+   12  theta
+   13  iota
+
+    Enter open   ↑↓ move   Esc clear
+
+  › /

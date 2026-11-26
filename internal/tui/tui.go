@@ -5,12 +5,18 @@
 // in a 12-entry menu), it selects immediately. r<N> resumes, p<N> opens the
 // CLI's session picker, x<N> removes a project. Arrow keys / j k + Enter
 // also work.
+//
+// Typing a name filters instead: "/" starts the filter explicitly, and any
+// letter that is not a menu key at an empty prompt starts it implicitly
+// (r/p/x followed by a letter becomes the filter text too, so "rust" still
+// works). See filter.go.
 package tui
 
 import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -64,6 +70,9 @@ type Options struct {
 	Theme              Theme
 	// GitFunc fetches statuses; nil means projects.GitAll.
 	GitFunc func([]string) map[string]projects.GitStatus
+	// Scores are frecency scores keyed by directory (see internal/frecency);
+	// the filter uses them to break ties between equally good matches.
+	Scores map[string]float64
 }
 
 // GitMsg delivers git statuses keyed by directory.
@@ -79,6 +88,10 @@ type Model struct {
 	git    map[string]projects.GitStatus
 	done   bool
 	result Result
+	// filtering is true while the type-to-filter prompt is active.
+	filtering bool
+	filter    string
+	fcursor   int
 }
 
 // New builds a model.
@@ -126,6 +139,9 @@ func (m Model) finish(r Result) (tea.Model, tea.Cmd) {
 
 func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
+	if m.filtering {
+		return m.filterKey(k)
+	}
 	s := k.String()
 	switch s {
 	case "ctrl+c":
@@ -161,6 +177,9 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.commit()
 	}
 	if len(s) != 1 {
+		if m.input == "" && k.Type == tea.KeyRunes && !k.Alt && len(k.Runes) == 1 && unicode.IsLetter(k.Runes[0]) {
+			return m.startFilter(s), nil // non-ASCII letter (é, ü, ...)
+		}
 		return m, nil
 	}
 	c := s[0]
@@ -188,9 +207,18 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case m.input == "" && c == '?':
 		m.help = !m.help
 		return m, nil
+	case m.input == "" && c == '/':
+		return m.startFilter(""), nil
+	case m.input == "" && isLetter(c):
+		return m.startFilter(s), nil
+	case len(m.input) == 1 && strings.ContainsRune("rpx", rune(m.input[0])) && isLetter(c):
+		// "r" then a letter is a name being typed, not r<N>.
+		return m.startFilter(m.input + s), nil
 	}
 	return m, nil
 }
+
+func isLetter(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
 
 // parse splits the input into an optional r/p/x prefix and a number.
 func (m Model) parse() (int, string) {
@@ -241,16 +269,23 @@ func (m Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.header())
 	b.WriteString("\n")
-	if m.help {
+	switch {
+	case m.filtering:
+		b.WriteString(m.filterView())
+	case m.help:
 		b.WriteString(m.helpView())
-	} else {
+	default:
 		b.WriteString(m.listView())
 	}
 	b.WriteString("\n")
 	if m.status != "" {
 		b.WriteString("  " + t.Error.Render(m.status) + "\n")
 	}
-	b.WriteString("  " + t.Prompt.Render("›") + " " + m.input + "\n")
+	if m.filtering {
+		b.WriteString("  " + t.Prompt.Render("›") + " " + t.Dim.Render("/") + m.filter + "\n")
+	} else {
+		b.WriteString("  " + t.Prompt.Render("›") + " " + m.input + "\n")
+	}
 	return b.String()
 }
 
@@ -342,6 +377,7 @@ func (m Model) helpView() string {
 		[2]string{"x<N>", "remove project N (asks first)"},
 		[2]string{"n", "new project"},
 		[2]string{"c", "edit config"},
+		[2]string{"/", "filter by name (or just type a name)"},
 		[2]string{"Esc", "clear input / close help / quit"},
 		[2]string{"q", "quit"},
 	)

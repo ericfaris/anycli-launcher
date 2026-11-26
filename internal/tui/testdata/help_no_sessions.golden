@@ -10,6 +10,7 @@
     x<N>        remove project N (asks first)
     n           new project
     c           edit config
+    /           filter by name (or just type a name)
     Esc         clear input / close help / quit
     q           quit
 

@@ -15,6 +15,7 @@ type Theme struct {
 	Cursor lipgloss.Style // the cursor marker and selected label
 	Prompt lipgloss.Style // input prompt
 	Error  lipgloss.Style // status messages
+	Match  lipgloss.Style // filter: the characters that matched
 }
 
 // Presets are the built-in theme names, in display order.
@@ -39,6 +40,7 @@ func NewTheme(name string, r *lipgloss.Renderer) Theme {
 			Cursor: s().Bold(true).Underline(true),
 			Prompt: s().Bold(true),
 			Error:  s().Bold(true),
+			Match:  s().Bold(true).Underline(true),
 		}
 	case "dusk":
 		return Theme{
@@ -51,6 +53,7 @@ func NewTheme(name string, r *lipgloss.Renderer) Theme {
 			Cursor: s().Foreground(lipgloss.Color("#eb6f92")).Bold(true),
 			Prompt: s().Foreground(lipgloss.Color("#31748f")).Bold(true),
 			Error:  s().Foreground(lipgloss.Color("#eb6f92")),
+			Match:  s().Foreground(lipgloss.Color("#f6c177")).Bold(true).Underline(true),
 		}
 	default:
 		// v3's palette: bold cyan title, yellow numbers, cyan accents.
@@ -64,6 +67,7 @@ func NewTheme(name string, r *lipgloss.Renderer) Theme {
 			Cursor: s().Foreground(lipgloss.Color("2")).Bold(true),
 			Prompt: s().Foreground(lipgloss.Color("2")).Bold(true),
 			Error:  s().Foreground(lipgloss.Color("1")),
+			Match:  s().Foreground(lipgloss.Color("3")).Bold(true).Underline(true),
 		}
 	}
 }

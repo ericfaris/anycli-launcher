@@ -66,6 +66,9 @@ func TestTmuxIntegration(t *testing.T) {
 	}
 	tmuxBin, err := exec.LookPath("tmux")
 	if err != nil {
+		if os.Getenv("AC_REQUIRE_TMUX") != "" {
+			t.Fatal("AC_REQUIRE_TMUX is set but tmux is not installed")
+		}
 		t.Skip("tmux not installed")
 	}
 	base := t.TempDir()

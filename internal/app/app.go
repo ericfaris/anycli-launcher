@@ -13,9 +13,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ericfaris/anycli-launcher/internal/clis"
 	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/internal/frecency"
 	"github.com/ericfaris/anycli-launcher/internal/launch"
 	"github.com/ericfaris/anycli-launcher/internal/projects"
 	"github.com/ericfaris/anycli-launcher/internal/shim"
@@ -40,6 +42,10 @@ type Env struct {
 	RunMenu  func(tui.Options) (tui.Result, error)
 	// Editor opens path for editing (ac config).
 	Editor func(path string) error
+	// FrecencyPath is the launch-history file (default frecency.DefaultPath()).
+	FrecencyPath string
+	// Now is the clock for frecency (default time.Now).
+	Now func() time.Time
 }
 
 // DefaultRun runs a command and returns trimmed stdout.
@@ -74,6 +80,12 @@ func Main(args []string, env *Env) int {
 	}
 	if a.env.Home == "" {
 		a.env.Home, _ = os.UserHomeDir()
+	}
+	if a.env.FrecencyPath == "" {
+		a.env.FrecencyPath = frecency.DefaultPath()
+	}
+	if a.env.Now == nil {
+		a.env.Now = time.Now
 	}
 	args, err := a.takeCDFile(args)
 	if err != nil {
@@ -269,7 +281,7 @@ func (a *app) launchByName(query string, mode clis.Mode) int {
 	if err := a.requireRoot(); err != nil {
 		return a.fail(1, err)
 	}
-	matches := projects.Resolve(projects.Discover(a.cfg), query)
+	matches := projects.ResolveRanked(projects.Discover(a.cfg), query, a.scores())
 	switch len(matches) {
 	case 0:
 		a.eprintf("ac: no project matching '%s'\n    run 'ac list' to see what is available\n", query)
@@ -301,6 +313,9 @@ func (a *app) launchDir(dir string, s config.Project, mode clis.Mode) int {
 	if cli == "" {
 		return a.fail(1, errors.New("no AI CLI configured yet; run 'ac setup'"))
 	}
+	if _, err := a.env.LookPath(cli); err == nil {
+		a.record(dir)
+	}
 	prof, _ := clis.Lookup(cli)
 	inv := prof.Build(launchOverride, config.ResolveFlags(a.cfg.DefaultFlags, s), s.Prompt, mode)
 	for _, n := range inv.Notes {
@@ -319,6 +334,28 @@ func (a *app) launchDir(dir string, s config.Project, mode clis.Mode) int {
 		return a.fail(code, err)
 	}
 	return code
+}
+
+// scores loads frecency scores; a missing or unreadable history is empty.
+func (a *app) scores() map[string]float64 {
+	s, _ := frecency.Load(a.env.FrecencyPath)
+	return s.Scores(a.env.Now())
+}
+
+// record adds a launch of dir to the history. It runs before the CLI starts
+// (the CLI may run for hours, and other ac's should see it). Failures are
+// ignored here; 'ac doctor' reports an unwritable or corrupt history.
+func (a *app) record(dir string) {
+	_ = frecency.Record(a.env.FrecencyPath, dir, a.env.Now())
+}
+
+// sortProjects applies sort_order: "recent"/"frecent" by frecency (ties in
+// name order), anything else by name (Discover's order).
+func (a *app) sortProjects(list []projects.Project, scores map[string]float64) []projects.Project {
+	if config.FrecencySort(a.cfg.SortOrder) {
+		return projects.SortByFrecency(list, scores)
+	}
+	return list
 }
 
 // cdOnly hands dir to the shim without launching anything.
@@ -417,9 +454,11 @@ func (a *app) menu() int {
 		if err := a.requireRoot(); err != nil {
 			return a.fail(1, err)
 		}
-		list := projects.Discover(a.cfg)
+		scores := a.scores()
+		list := a.sortProjects(projects.Discover(a.cfg), scores)
 		prof, _ := clis.Lookup(a.cfg.CLI)
 		res, err := a.env.RunMenu(tui.Options{
+			Scores:    scores,
 			Version:   Version,
 			CLI:       a.cfg.CLI,
 			Entries:   a.entries(list),
@@ -509,7 +548,8 @@ Usage:
   ac help | version
 
 <name> matches a directory name or alias: exact, case-insensitive, prefix,
-then substring. A project named like help/list/config/doctor/setup/resume/
+substring, then fuzzy (letters in order). When several prefix/substring/fuzzy
+matches remain, the one you launch most (frecency) wins. A project named like help/list/config/doctor/setup/resume/
 pick/version takes precedence over that subcommand.
 
 Shell integration (needed for ac to cd your shell):

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ericfaris/anycli-launcher/internal/config"
 	"github.com/ericfaris/anycli-launcher/internal/launch"
@@ -44,6 +45,7 @@ type harness struct {
 	ghFail   bool
 	menu     []tui.Result
 	menuOpts []tui.Options
+	now      time.Time
 }
 
 // newHarness creates a home with a projects root and a config with cli=claude.
@@ -61,6 +63,7 @@ func newHarness(t *testing.T) *harness {
 		launcher: &fakeLauncher{},
 		onPath:   map[string]bool{"claude": true, "git": hasGit(), "gh": true},
 		ghAuthOK: true,
+		now:      time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC),
 	}
 	os.MkdirAll(h.root, 0o755)
 	h.env = &Env{
@@ -91,7 +94,9 @@ func newHarness(t *testing.T) *harness {
 			}
 			return DefaultRun(dir, name, args...)
 		},
-		Launcher: h.launcher,
+		Launcher:     h.launcher,
+		FrecencyPath: filepath.Join(home, ".local", "state", "anycli-launcher", "frecency.json"),
+		Now:          func() time.Time { return h.now },
 		RunMenu: func(o tui.Options) (tui.Result, error) {
 			h.menuOpts = append(h.menuOpts, o)
 			if len(h.menu) == 0 {

@@ -43,7 +43,7 @@ type Config struct {
 	CLILaunch     string             `toml:"cli_launch,omitempty"`
 	CLIConfigDir  string             `toml:"cli_config_dir,omitempty"`
 	DefaultFlags  string             `toml:"default_flags,omitempty"`
-	SortOrder     string             `toml:"sort_order,omitempty"`
+	SortOrder     string             `toml:"sort_order,omitempty"` // name | recent (frecent)
 	ShowGitStatus bool               `toml:"show_git_status"`
 	Theme         string             `toml:"theme,omitempty"`
 	Projects      map[string]Project `toml:"projects,omitempty"`
@@ -281,6 +281,23 @@ var colorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // ValidColor reports whether s is a #rrggbb hex color.
 func ValidColor(s string) bool { return colorRe.MatchString(s) }
+
+// SortOrders are the accepted sort_order values. "recent" and "frecent"
+// are the same: by launch frecency, ties in name order.
+var SortOrders = []string{"name", "recent", "frecent"}
+
+// FrecencySort reports whether a sort_order value means "by frecency".
+func FrecencySort(order string) bool { return order == "recent" || order == "frecent" }
+
+// ValidSortOrder reports whether order is one of SortOrders.
+func ValidSortOrder(order string) bool {
+	for _, o := range SortOrders {
+		if o == order {
+			return true
+		}
+	}
+	return false
+}
 
 // Str returns a pointer to s (helper for Project.Flags).
 func Str(s string) *string { return &s }

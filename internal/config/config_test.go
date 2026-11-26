@@ -218,3 +218,17 @@ func TestOverlay(t *testing.T) {
 		}
 	}
 }
+
+func TestSortOrders(t *testing.T) {
+	for _, o := range []string{"name", "recent", "frecent"} {
+		if !ValidSortOrder(o) {
+			t.Errorf("%s should be valid", o)
+		}
+	}
+	if ValidSortOrder("newest") || ValidSortOrder("") {
+		t.Fatal("invalid orders accepted")
+	}
+	if !FrecencySort("recent") || !FrecencySort("frecent") || FrecencySort("name") || FrecencySort("bogus") {
+		t.Fatal("FrecencySort")
+	}
+}

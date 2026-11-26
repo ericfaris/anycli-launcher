@@ -127,7 +127,7 @@ func ParseV3YAML(r io.Reader) (Migration, error) {
 			case "sort_order":
 				c.SortOrder = v
 				if v == "recent" {
-					m.Notes = append(m.Notes, "sort_order \"recent\" kept; v4 ranks by frecency in a later release, until then the list is sorted by name")
+					m.Notes = append(m.Notes, "sort_order \"recent\" kept; v4 ranks by launch frecency, and that history starts empty, so the list is in name order until you launch projects with v4")
 				}
 			case "scan_depth":
 				if n, err := strconv.Atoi(v); err == nil {

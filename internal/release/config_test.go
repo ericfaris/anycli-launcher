@@ -15,7 +15,8 @@ func read(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	// Windows checkouts may convert to CRLF; compare content, not line ends.
+	return strings.ReplaceAll(string(b), "\r\n", "\n")
 }
 
 // The pieces that must agree across .goreleaser.yaml, go.mod, buildinfo and
@@ -71,6 +72,10 @@ func TestReleaseConfigAgrees(t *testing.T) {
 	}
 	if !strings.HasPrefix(sh, "#!/bin/sh\n") {
 		t.Error("install.sh must be POSIX sh")
+	}
+	// .gitattributes keeps it LF even in Windows checkouts.
+	if raw, _ := os.ReadFile(repoFile(t, "install.sh")); strings.Contains(string(raw), "\r") {
+		t.Error("install.sh has CRLF line endings")
 	}
 }
 

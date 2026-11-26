@@ -28,14 +28,24 @@ func powershell(t *testing.T) string {
 func runPs1(t *testing.T, ps string, rel *release, extraEnv []string, args ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command(ps, append([]string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", repoFile(t, "install.ps1")}, args...)...)
-	cmd.Env = append(os.Environ(), append([]string{
-		"AC_RELEASES_URL=" + rel.URL,
-		"AC_VERSION=",
-		"AC_INSTALL_DIR=",
-		// Every test passes -Dir; arch is pinned so arm64 runners match too.
-		"PROCESSOR_ARCHITECTURE=AMD64",
-		"PROCESSOR_ARCHITEW6432=",
-	}, extraEnv...)...)
+	// Drop inherited values instead of setting them empty: Windows env
+	// blocks don't carry empty variables reliably.
+	var env []string
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(strings.ToUpper(kv), "=")
+		if !strings.HasPrefix(k, "AC_") && !strings.HasPrefix(k, "PROCESSOR_ARCHITE") {
+			env = append(env, kv)
+		}
+	}
+	arch := "AMD64" // pinned, so arm64 runners take the same path
+	for _, kv := range extraEnv {
+		if v, ok := strings.CutPrefix(kv, "PROCESSOR_ARCHITECTURE="); ok {
+			arch = v
+		} else {
+			env = append(env, kv)
+		}
+	}
+	cmd.Env = append(env, "AC_RELEASES_URL="+rel.URL, "PROCESSOR_ARCHITECTURE="+arch, "PROCESSOR_ARCHITEW6432="+arch)
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {

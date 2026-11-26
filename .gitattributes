@@ -1,3 +1,5 @@
 # Golden files and fixtures are compared byte-for-byte; keep LF on Windows.
 *.golden text eol=lf
 tests/fixtures/** text eol=lf
+# Shell scripts break with CRLF (e.g. Git Bash on Windows).
+*.sh text eol=lf

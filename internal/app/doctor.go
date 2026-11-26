@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ericfaris/anycli-launcher/internal/clis"
 	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/internal/frecency"
 	"github.com/ericfaris/anycli-launcher/internal/projects"
 	"github.com/ericfaris/anycli-launcher/internal/tui"
 )
@@ -88,7 +90,13 @@ func (a *app) doctor() int {
 	if !tui.ValidTheme(a.cfg.Theme) {
 		r.warn(fmt.Sprintf("unknown theme %q", a.cfg.Theme), "presets: "+strings.Join(tui.Presets, ", "))
 	}
-	r.info(fmt.Sprintf("theme: %s · scan depth: %d · git status: %v", a.cfg.Theme, a.cfg.ScanDepth, a.cfg.ShowGitStatus))
+	if !config.ValidSortOrder(a.cfg.SortOrder) {
+		r.warn(fmt.Sprintf("unknown sort_order %q", a.cfg.SortOrder), "use "+strings.Join(config.SortOrders, ", ")+"; sorting by name")
+	}
+	r.info(fmt.Sprintf("theme: %s · scan depth: %d · git status: %v · sort: %s", a.cfg.Theme, a.cfg.ScanDepth, a.cfg.ShowGitStatus, a.cfg.SortOrder))
+
+	r.section("Launch history (frecency)")
+	a.doctorFrecency(r)
 
 	r.section("AI CLI")
 	if a.cfg.CLI == "" {
@@ -150,6 +158,55 @@ func (a *app) doctor() int {
 	}
 	a.printf("✗ Problems found (%d %s failed)\n", r.fails, plural(r.fails, "check", "checks"))
 	return 1
+}
+
+func (a *app) doctorFrecency(r *report) {
+	path := a.env.FrecencyPath
+	s, err := frecency.Load(path)
+	switch {
+	case errors.Is(err, frecency.ErrCorrupt):
+		r.warn("history file is corrupt ("+path+")", "ignored; the next launch starts a fresh history")
+		return
+	case err != nil:
+		r.warn("history file unreadable: "+err.Error(), "ranking falls back to name order")
+		return
+	case !config.Exists(path):
+		r.pass("no launches recorded yet (" + path + ")")
+	default:
+		r.pass(fmt.Sprintf("%d %s in %s", len(s.Entries), plural(len(s.Entries), "directory", "directories"), path))
+	}
+	if err := dirWritable(filepath.Dir(path)); err != nil {
+		r.warn("history not writable: "+err.Error(), "launches won't be recorded")
+	}
+	if config.FrecencySort(a.cfg.SortOrder) {
+		r.info("menu sorted by frecency (sort_order = " + a.cfg.SortOrder + ")")
+	} else {
+		r.info("menu sorted by name; frecency ranks the filter and 'ac <partial>' (sort_order = \"recent\" sorts the menu too)")
+	}
+}
+
+// dirWritable checks that dir (or its nearest existing parent) accepts a
+// new file, without leaving anything behind.
+func dirWritable(dir string) error {
+	for {
+		if st, err := os.Stat(dir); err == nil {
+			if !st.IsDir() {
+				return fmt.Errorf("%s is not a directory", dir)
+			}
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return fmt.Errorf("no existing parent for %s", dir)
+		}
+		dir = parent
+	}
+	f, err := os.CreateTemp(dir, ".ac-doctor-*")
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return os.Remove(f.Name())
 }
 
 // cmdMigrate: ac migrate [file] [--force].

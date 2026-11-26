@@ -27,9 +27,9 @@ import (
 // TaskRow is one task session in the running view (already sanitized).
 type TaskRow struct {
 	ID, Branch, Task, Age string
-	Status               string // running, idle, finished, unknown
-	Git                  string // "clean", "dirty ↑2", "worktree missing", ...
-	Backend              string
+	Status                string // running, idle, finished, unknown
+	Git                   string // "clean", "dirty ↑2", "worktree missing", ...
+	Backend               string
 }
 
 // TasksMsg delivers the running view's rows.

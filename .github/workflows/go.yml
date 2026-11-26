@@ -3,7 +3,7 @@ name: Go (v4)
 on:
   workflow_dispatch:
   push:
-    branches: [main, v4]
+    branches: [main, v4, "v4-*"]
   pull_request:
 
 jobs:

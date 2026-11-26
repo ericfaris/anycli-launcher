@@ -26,6 +26,50 @@ jobs:
       - name: Build
         run: go build -o dist/ ./cmd/ac
 
+  release-check:
+    # Release tooling without a release: shellcheck install.sh, validate
+    # .goreleaser.yaml, build every archive as a snapshot (no publishing,
+    # signing or SBOM), then install from that snapshot with install.sh.
+    runs-on: ubuntu-latest
+    env:
+      SHELLCHECK_VERSION: "0.11.0"
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Install shellcheck ${{ env.SHELLCHECK_VERSION }}
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+      - name: shellcheck install.sh
+        run: shellcheck --version && shellcheck -s sh install.sh
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.20.3
+          args: check
+      - name: goreleaser snapshot
+        uses: goreleaser/goreleaser-action@v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.20.3
+          args: release --snapshot --clean --skip=sign,sbom
+      - name: install.sh from the snapshot (dash and bash)
+        run: |
+          mkdir -p "$RUNNER_TEMP/rel/latest/download"
+          cp dist/*.tar.gz dist/*.zip dist/checksums.txt "$RUNNER_TEMP/rel/latest/download/"
+          for sh in dash bash; do
+            AC_RELEASES_URL="file://$RUNNER_TEMP/rel" "$sh" install.sh --dir "$RUNNER_TEMP/bin-$sh" --shell bash
+            "$RUNNER_TEMP/bin-$sh/ac" --version | grep -q "anycli-launcher .*-snapshot"
+          done
+          test -s dist/homebrew/Casks/anycli-launcher.rb
+          test -s dist/scoop/anycli-launcher.json
+
   shim-smoke:
     # Evals the real `ac init <shell>` output and checks `ac <name>` cds the
     # parent shell (cmd/ac/shim_e2e_test.go). AC_REQUIRE_SHELLS turns a

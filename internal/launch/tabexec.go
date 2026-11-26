@@ -128,6 +128,8 @@ func TabExec(args []string, stdout, stderr io.Writer) int {
 	// "2c/3434" in the CLI's prompt (v3's _ac_drain_tty).
 	drainFn()
 	env := append(os.Environ(), "_AC_SPAWNED_TAB=1")
+	// Best effort, like Here: no pid file only makes liveness "unknown".
+	_ = WritePIDFile(spec.PIDFile, os.Getpid())
 	code, err := execFn(spec.Argv, spec.Dir, env)
 	if err != nil {
 		return tabFail(stderr, err, 127)

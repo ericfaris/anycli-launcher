@@ -17,6 +17,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -39,6 +41,10 @@ type Request struct {
 	// Resume asks a multiplexer to re-attach to an existing session as is,
 	// instead of opening another window running a fresh CLI.
 	Resume bool
+	// PIDFile, when set, receives the CLI's process id once it starts (here:
+	// the child; tab: the trampoline, which on Unix execs into the CLI). Task
+	// sessions use it for liveness. tmux/zellij ignore it.
+	PIDFile string
 }
 
 // Backend runs a launch request and returns the CLI's exit code.
@@ -79,7 +85,11 @@ func (h Here) Launch(r Request) (int, error) {
 	// Ctrl-C belongs to the CLI; don't let it kill the launcher first.
 	signal.Ignore(os.Interrupt)
 	defer signal.Reset(os.Interrupt)
-	err = cmd.Run()
+	if err = cmd.Start(); err == nil {
+		// Best effort: a missing pid file only makes liveness "unknown".
+		_ = WritePIDFile(r.PIDFile, cmd.Process.Pid)
+		err = cmd.Wait()
+	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), nil
@@ -96,6 +106,31 @@ func WriteCDFile(path, dir string) error {
 		return nil
 	}
 	return os.WriteFile(path, []byte(dir), 0o600)
+}
+
+// WritePIDFile records pid at path (no-op for ""), replacing it atomically
+// so a reader never sees a half-written number.
+func WritePIDFile(path string, pid int) error {
+	if path == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".pid-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(strconv.Itoa(pid) + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // TitleSeq is the OSC 0 sequence setting the terminal/tab title. Control

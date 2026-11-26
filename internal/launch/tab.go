@@ -35,6 +35,9 @@ type TabSpec struct {
 	// v3's `bash -l script` did. Off where the tab already runs an
 	// interactive shell (iTerm2, Terminal.app) and on native Windows.
 	Login bool `json:"login,omitempty"`
+	// PIDFile receives the trampoline's pid right before it execs the CLI
+	// (the same pid on Unix; the CLI's parent on Windows). Task liveness.
+	PIDFile string `json:"pid_file,omitempty"`
 }
 
 // TabInvocation is everything BuildTab needs; it is plain data so each
@@ -187,6 +190,7 @@ func (t *Tab) Launch(r Request) (int, error) {
 	}
 	platform := d.Env.Platform()
 	spec := SpecFor(det.Terminal, platform, r.Dir, r.Title, r.Color, append([]string{bin}, r.Args...))
+	spec.PIDFile = r.PIDFile
 	tmp := d.TempDir
 	if tmp == "" {
 		tmp = os.TempDir()

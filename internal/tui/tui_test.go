@@ -113,6 +113,21 @@ func TestGoldenViews(t *testing.T) {
 
 	bad, _ := send(t, m, "9")
 	golden(t, "status_no_entry", bad.View())
+
+	// Phase 3: the active backend, right-aligned on the CLI line.
+	for name, label := range map[string]string{"menu_backend_auto": "auto: wt", "menu_backend_tmux": "tmux"} {
+		b := model(3, "default", termenv.Ascii)
+		b.opts.Backend = label
+		golden(t, name, b.View())
+	}
+	// A long CLI name plus the longest label still fits the box.
+	long := model(1, "default", termenv.Ascii)
+	long.opts.CLI, long.opts.Backend = "kiro-cli", "auto: Terminal"
+	for _, line := range strings.Split(long.View(), "\n")[:5] {
+		if n := len([]rune(line)); n > 0 && n != 40 {
+			t.Fatalf("header line width %d: %q", n, line)
+		}
+	}
 }
 
 func TestGoldenThemes(t *testing.T) {

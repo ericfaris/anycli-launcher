@@ -1,0 +1,16 @@
+
+  ╭────────────────────────────────────╮
+  │  anycli-launcher           v4.0.0  │
+  │  claude                  auto: wt  │
+  ╰────────────────────────────────────╯
+
+ ▸  1  ● terminal
+    2  ● projects (root)
+    3  ● .claude (config)
+    4  alpha
+    5  ML
+    6  work/api
+
+    c config   n new   x<N> remove   ? help   q quit
+
+  › 

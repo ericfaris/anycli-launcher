@@ -63,6 +63,9 @@ type Result struct {
 type Options struct {
 	Version string
 	CLI     string // shown in the header
+	// Backend is the active launch backend ("here", "auto: wt", "tmux"),
+	// shown right-aligned on the CLI line; "" shows nothing.
+	Backend string
 	Entries []Entry
 	ShowGit bool
 	// CanResume/CanPick decide whether "?" help lists r<N>/p<N>.
@@ -301,8 +304,8 @@ func (m Model) header() string {
 	var b strings.Builder
 	b.WriteString("  " + t.Title.Render("╭"+strings.Repeat("─", boxInner)+"╮") + "\n")
 	b.WriteString(line("anycli-launcher", "v"+m.opts.Version, t.Title.Render, t.Dim.Render))
-	if m.opts.CLI != "" {
-		b.WriteString(line(m.opts.CLI, "", t.Dim.Render, t.Dim.Render))
+	if m.opts.CLI != "" || m.opts.Backend != "" {
+		b.WriteString(line(m.opts.CLI, m.opts.Backend, t.Dim.Render, t.Dim.Render))
 	}
 	b.WriteString("  " + t.Title.Render("╰"+strings.Repeat("─", boxInner)+"╯") + "\n")
 	return b.String()

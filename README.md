@@ -80,7 +80,7 @@ dropped: tracked apps, show_sessions, and Windows Terminal theme names.
 | Command | What it does |
 |---|---|
 | `ac` | Open the menu |
-| `ac <name>` | Launch in the matching project: exact, case-insensitive, prefix, then substring, on folder name or alias |
+| `ac <name>` | Launch in the matching project (see [Name matching](#name-matching)) |
 | `ac <name> -r` / `--resume`, `ac resume <name>` | Resume the most recent session |
 | `ac <name> --resume-picker`, `ac pick <name>` | Open the CLI's own session picker |
 | `ac list` | List projects (`name` or `name<TAB>label`) |
@@ -96,6 +96,31 @@ A project named `help`, `version`, `list`, `config`, `doctor`, `setup`, `resume`
 or `pick` wins over the subcommand, as in v3. `init`, `new`, `remove` and
 `migrate` are always subcommands.
 
+### Name matching
+
+`ac <name>` tries, in order: exact, case-insensitive exact, prefix, substring,
+then fuzzy (the letters in order, so `ac acl` finds `anycli-launcher`). The
+first tier with a match wins. When that tier has several matches, the one
+you launch most (frecency, below) wins. If they tie, `ac` lists them and
+exits 1. Exact and case-insensitive exact matches always win outright, so
+history never hijacks a real name. `ac remove` still needs an exact name.
+
+### Frecency
+
+Every launch is recorded in
+`~/.local/state/anycli-launcher/frecency.json` (or
+`$XDG_STATE_HOME/anycli-launcher/`; `$AC_FRECENCY_FILE` overrides the file).
+Scoring is zoxide's: each launch adds 1 to a folder's rank, weighted x4 if the
+last launch was within the hour, x2 within the day, x0.5 within the week,
+x0.25 after that. When the ranks add up past 1000, they are all scaled down
+and the faded ones dropped, so the file stays small (at most 500 folders). A
+missing or corrupt file is treated as empty and never blocks a launch;
+`ac doctor` reports it. Delete the file to reset your history.
+
+Frecency ranks `ac <partial>` and the menu filter. With
+`sort_order = "recent"` (or `"frecent"`), it sorts the menu too, with ties in
+name order. `ac list` is always in name order.
+
 ### Menu keys
 
 | Key | Action |
@@ -109,8 +134,28 @@ or `pick` wins over the subcommand, as in v3. `init`, `new`, `remove` and
 | ↑ ↓ / `j` `k`, Enter | move and open |
 | `n` | new project |
 | `c` | edit config |
+| `/` | filter by name |
+| any other letter | start the filter with that letter |
 | `?` | key help |
 | `q`, Esc, Ctrl-C | quit |
+
+### Filtering
+
+Type part of a name to filter the menu. Matching is fuzzy and ignores case
+(`mlp` finds `ml-project`). The matched letters are highlighted, and results
+are ranked by match quality, then frecency. Enter opens the top match, ↑ ↓
+(or Tab, Ctrl-N/P) move, Backspace edits, and Esc clears the filter.
+
+To keep the number keys and single-letter commands working, a letter starts
+the filter only when it isn't a menu key at an empty prompt:
+
+- `n`, `c`, `q` and `?` keep their meaning, and `j`/`k` still move the cursor.
+- `r`, `p` and `x` still wait for a number (`r4`). If a letter follows
+  instead, both letters become the filter (`ru` filters for `rust`).
+- To filter for a name that starts with `n`, `c`, `q`, `j` or `k`, press `/`
+  first (`/kiro`).
+- Once the filter is open, every key you type is text, digits and command
+  letters included, until Esc or until you backspace it empty.
 
 ### Removing a project
 
@@ -142,6 +187,7 @@ cli_config_dir = ""            # override the CLI's config folder shortcut
 default_flags = "--model opus"
 show_git_status = true         # branch, * when dirty, ↑ahead ↓behind
 theme = "default"              # default | mono | dusk
+sort_order = "name"            # name | recent (frecency, alias "frecent")
 
 [projects.my-app]
 alias = "App"                  # menu label
@@ -189,8 +235,11 @@ No local Go? Use Docker:
 
 CI (`.github/workflows/go.yml`) runs `go test` on Linux, macOS and Windows, and
 the shim smoke test in bash and zsh (Linux, plus macOS's bash 3.2) and pwsh
-(Windows). The plan for later releases (frecency, filtering, new-tab and tmux
+(Windows). The plan for later releases (new-tab and tmux
 backends, worktree agents, packaging) is in `docs/V4-PLAN.md`.
+
+Tests never touch your real history: the app tests pass
+`Env.FrecencyPath`, and the shim e2e test sets `AC_FRECENCY_FILE`.
 
 ## License
 

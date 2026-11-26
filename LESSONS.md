@@ -43,3 +43,19 @@
 - `ac init pwsh` can't bootstrap via the name `ac`: Windows PowerShell has a built-in `ac` alias (Add-Content), and macOS has `/usr/sbin/ac`. Resolve the binary with `Get-Command ac -CommandType Application | Select-Object -First 1`.
 - A "green locally" shim test proved nothing: only the Windows/macOS CI runners exposed it. Keep the OS matrix for the shim smoke test.
 - Extracting a Go tarball over an existing `~/.local/go` leaves stale files that break builds; remove the old tree first.
+
+## 2026-11-26: v4 phase 2 (frecency + filter)
+
+- **Type-to-filter vs single-letter commands**: keep the commands (`n c q ? j k`)
+  at an empty prompt, add `/` for an explicit filter, and let any other letter
+  start it. Turning `r`/`p`/`x` + a letter into filter text keeps `r4` and
+  still lets you type `rust`. This kept every phase 1 key test passing as-is.
+- **Isolate per-user state in tests on every OS**: Windows' `os.UserHomeDir`
+  reads `USERPROFILE`, not `HOME`. A subprocess test that only overrides
+  `HOME` would write the runner's real history. Give state files an explicit
+  env override (`AC_FRECENCY_FILE`).
+- **Reading a path under a regular file** fails with ENOTDIR on Unix
+  (not `ErrNotExist`) but path-not-found on Windows. Tests for an unwritable
+  location must accept either.
+- CI's push trigger listed only `main`/`v4`, so a feature branch got no run
+  until `v4-*` was added.

@@ -1,6 +1,13 @@
-// Package launch starts the AI CLI. Phase 1 has only the "here" backend:
-// run the CLI in the current terminal, in the project directory, and tell
-// the shell shim to cd there afterwards.
+// Package launch starts the AI CLI through a pluggable backend:
+//
+//   - here: run the CLI in the current terminal, in the project directory,
+//     and tell the shell shim to cd there afterwards (the default).
+//   - tab: open a new terminal tab (Windows Terminal, iTerm2, Terminal.app,
+//     kitty, WezTerm, GNOME Terminal) and run it there (tab.go).
+//   - tmux / zellij: one session per project, created or re-attached.
+//
+// Backends build their commands as plain data and run them through an
+// injectable Runner, so every argv is unit-tested.
 package launch
 
 import (
@@ -22,6 +29,16 @@ type Request struct {
 	// CDFile is the shim's --cd-file; the project dir is written there so the
 	// parent shell lands in it after the CLI exits.
 	CDFile string
+
+	// Used by the tab and multiplexer backends only; Here ignores them.
+
+	// Color is the tab color (#rrggbb, already validated) or "".
+	Color string
+	// Session names the project for tmux/zellij sessions.
+	Session string
+	// Resume asks a multiplexer to re-attach to an existing session as is,
+	// instead of opening another window running a fresh CLI.
+	Resume bool
 }
 
 // Backend runs a launch request and returns the CLI's exit code.

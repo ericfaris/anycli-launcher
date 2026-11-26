@@ -2,18 +2,30 @@ package launch
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The test binary doubles as a fake CLI: it prints its cwd and args.
 func TestMain(m *testing.M) {
 	if os.Getenv("LAUNCH_HELPER") == "1" {
 		wd, _ := os.Getwd()
+		if out := os.Getenv("LAUNCH_HELPER_OUT"); out != "" {
+			// tmux integration: the pane's output isn't ours to read, so
+			// append a JSON record and stay alive until the server is killed.
+			rec, _ := json.Marshal(map[string]any{"cwd": wd, "args": os.Args[1:]})
+			f, _ := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+			f.Write(append(rec, '\n'))
+			f.Close()
+			time.Sleep(60 * time.Second)
+			os.Exit(0)
+		}
 		fmt.Printf("cwd=%s\nargs=%s\n", wd, strings.Join(os.Args[1:], "|"))
 		if len(os.Args) > 1 && os.Args[1] == "fail" {
 			os.Exit(3)
@@ -85,6 +97,38 @@ func TestHereNotFound(t *testing.T) {
 func TestWriteCDFileBlank(t *testing.T) {
 	if err := WriteCDFile("", "/x"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Regression: the phase 3 Request fields (Color, Session, Resume) must not
+// change what Here does. Same argv, cwd, title sequence and cd-file, byte
+// for byte, as a phase 2 request.
+func TestHereIgnoresPhase3Fields(t *testing.T) {
+	dir := t.TempDir()
+	run := func(r Request) (string, string) {
+		h := helper(t)
+		var out bytes.Buffer
+		h.Stdout, h.Stderr = &out, &out
+		r.CDFile = filepath.Join(t.TempDir(), "cd")
+		if code, err := h.Launch(r); code != 0 || err != nil {
+			t.Fatalf("code=%d err=%v", code, err)
+		}
+		cd, _ := os.ReadFile(r.CDFile)
+		return out.String(), string(cd)
+	}
+	base := Request{Dir: dir, Name: "fake", Args: []string{"--x", "a b"}, Title: "T"}
+	wantOut, wantCD := run(base)
+	ext := base
+	ext.Color, ext.Session, ext.Resume = "#ff0000", "proj", true
+	gotOut, gotCD := run(ext)
+	if gotOut != wantOut || gotCD != wantCD {
+		t.Fatalf("Here changed:\n%q\n%q", wantOut, gotOut)
+	}
+	if fmt.Sprintf("%T", New(BackendHere, Deps{})) != "launch.Here" {
+		t.Fatal("here must map to Here")
+	}
+	if fmt.Sprintf("%T", New("bogus", Deps{})) != "launch.Here" {
+		t.Fatal("unknown names must map to Here")
 	}
 }
 

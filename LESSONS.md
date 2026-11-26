@@ -118,3 +118,9 @@
 - **`irm | iex` runs in the caller's session:** `exit` in install.ps1 would
   close the user's PowerShell. Throw instead (`-File` still exits 1).
 - A `/vN` module suffix is required for `go install ...@latest` to see vN tags.
+
+## 2026-11-26: cutover gotchas
+
+- Deleting the v3 `.bash` file would have broken the user's shell (rc files `source` it directly). Switch the rc lines to `eval "$(ac init <shell>)"` (with backups) and put the binary on PATH *before* deleting.
+- Removing `.shellcheckrc` re-enabled SC2016 on install.sh's literal `eval "$(...)"` lines; use inline disables.
+- A private repo makes every public install path 404 (`releases/latest/download`, brew, scoop, go install). Check repo visibility before announcing a release.

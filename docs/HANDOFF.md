@@ -45,7 +45,10 @@
    3. Mint a fine-grained PAT: resource owner `ericfaris`, only those two repos, permission Contents: read and write (nothing else), an expiry you'll remember.
    4. Add it to `ericfaris/anycli-launcher` as the Actions secret `TAP_GITHUB_TOKEN` (`gh secret set TAP_GITHUB_TOKEN -R ericfaris/anycli-launcher`, paste at the prompt). Without it, releases still publish to GitHub; the cask/scoop steps are skipped with a notice.
    5. Check Settings -> Actions -> General -> Workflow permissions doesn't block `contents: write` for the workflow (the job requests it explicitly).
-3. **Cutover:** merged and v3 files deleted. Remaining: tag `v4.0.0` (`git tag -a v4.0.0 -m "v4.0.0" && git push origin v4.0.0`), watch `release.yml`, then verify each install method and `cosign verify-blob` per README; on macOS check Gatekeeper doesn't block the cask's `ac`. Issue #10 is obsolete (v3 retired).
+3. **Released:** v4.0.0 tagged and published 2026-11-26 (signed checksums + SBOMs). `ericfaris/homebrew-tap` and `ericfaris/scoop-bucket` exist (public, empty). Remaining:
+   - **The launcher repo is PRIVATE**, so anonymous `install.sh`, brew, scoop and `go install` all 404. Either make the repo public (owner's call) or accept authenticated-only (`gh release download`).
+   - `TAP_GITHUB_TOKEN` is not set (fine-grained PATs can only be minted in the web UI), so the cask/scoop manifests were not published. After setting it, re-run the release job or tag v4.0.1.
+   - Verify each install method + `cosign verify-blob` once public. Issue #10 is obsolete (v3 retired).
 4. Manual checks for phase 4 on a real terminal:
    - `ac <p> --task "..."` with backend tmux: attach, `w` shows running, leave it quiet 10 min -> idle, Enter from the view re-attaches (and switch-client from inside tmux).
    - zellij task: `list-sessions` parsing (EXITED marker), attach from the view.

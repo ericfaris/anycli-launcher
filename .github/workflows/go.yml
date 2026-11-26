@@ -1,0 +1,55 @@
+name: Go (v4)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, v4]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Build
+        run: go build -o dist/ ./cmd/ac
+
+  shim-smoke:
+    # Evals the real `ac init <shell>` output and checks `ac <name>` cds the
+    # parent shell (cmd/ac/shim_e2e_test.go). AC_REQUIRE_SHELLS turns a
+    # missing shell into a failure instead of a skip.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shells: bash,zsh
+          - os: macos-latest
+            shells: bash,zsh # macOS /bin/bash is 3.2: the shim must work there
+          - os: windows-latest
+            shells: pwsh
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install zsh
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+      - name: Shim smoke test
+        env:
+          AC_REQUIRE_SHELLS: ${{ matrix.shells }}
+        run: go test -count=1 -v -run 'TestShimE2E|TestScriptsParse' ./cmd/ac ./internal/shim

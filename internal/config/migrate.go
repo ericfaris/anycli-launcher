@@ -216,7 +216,7 @@ func projectHeader(section, name string) string {
 func isPreset(t string) bool { return t == "default" || t == "mono" || t == "dusk" }
 
 // yamlScalar unquotes a v3 scalar: double quotes with \" and \\ escapes,
-// single quotes with '' escapes, or a bare value (trailing " # comment"
+// single quotes with ” escapes, or a bare value (trailing " # comment"
 // stripped, which v3 itself failed to do).
 func yamlScalar(v string) string {
 	v = strings.TrimSpace(v)

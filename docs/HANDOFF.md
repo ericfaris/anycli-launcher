@@ -1,8 +1,8 @@
 # Handoff: anycli-launcher
 
 **What:** `ac` picks a project, cds into it, and launches an AI CLI.
-- v4: Go rewrite on branch `v4` (phases 1-4: core, frecency, filter, backends, task worktrees). Phase 5 (release tooling) is on branch `v4-phase5`, pushed and not merged into `v4`. See `docs/V4-PLAN.md`.
-- v3: 5k-line bash (`anycli-launcher.bash`), on branch `v3` and still on `main` until v4 lands. The v3 files are still in the v4 tree; delete them at cutover.
+- v4: Go rewrite, all 5 phases (core, frecency, filter, backends, task worktrees, release tooling) merged to `main` (cutover done 2026-11-26). See `docs/V4-PLAN.md`.
+- v3: the old 5k-line bash launcher lives only on branch `v3`. `tests/fixtures/` stays because the Go migrate tests use it.
 
 ## Layout (v4)
 - `cmd/ac`: main and real wiring (TTY detection, Bubble Tea program, $EDITOR). `shim_e2e_test.go` evals the real shim in bash/zsh/fish/pwsh. `tab_e2e_test.go` runs a whole tab launch through a fake `kitty` (the test binary) and the real trampoline.
@@ -35,7 +35,7 @@
   (add `--user $(id -u):$(id -g) -e HOME=/tmp` to avoid root-owned files).
 - Release dry run (goreleaser v2.20.3, not in the repo; get it from its GitHub release into a scratch dir): `goreleaser check` and `goreleaser release --snapshot --clean --skip=sign,sbom` (archives, cask and scoop manifest in `dist/`). Install from it: copy `dist/*.tar.gz dist/*.zip dist/checksums.txt` to `<d>/latest/download/`, then `AC_RELEASES_URL=file://<d> sh install.sh --dir <bin>`.
 - Install-script tests: `go test ./internal/release` (sh on Unix, ps1 on Windows). `shellcheck -s sh install.sh` (0.11.0, same as CI).
-- CI: `.github/workflows/go.yml` (go test on 3 OSes, the shim smoke job, and `release-check`: shellcheck, goreleaser check + snapshot, install.sh from the snapshot under dash and bash). It runs on pushes to `main`, `v4` and `v4-*`, and on PRs. The v3 `cross-platform-tests.yml` still runs on main.
+- CI: `.github/workflows/go.yml` (go test on 3 OSes, the shim smoke job, and `release-check`: shellcheck, goreleaser check + snapshot, install.sh from the snapshot under dash and bash). It runs on pushes to `main`, `v4` and `v4-*`, and on PRs. The v3 workflow is gone.
 
 ## Open items (priority)
 1. Merge `v4-phase5` into `v4` once CI is green.
@@ -45,12 +45,7 @@
    3. Mint a fine-grained PAT: resource owner `ericfaris`, only those two repos, permission Contents: read and write (nothing else), an expiry you'll remember.
    4. Add it to `ericfaris/anycli-launcher` as the Actions secret `TAP_GITHUB_TOKEN` (`gh secret set TAP_GITHUB_TOKEN -R ericfaris/anycli-launcher`, paste at the prompt). Without it, releases still publish to GitHub; the cask/scoop steps are skipped with a notice.
    5. Check Settings -> Actions -> General -> Workflow permissions doesn't block `contents: write` for the workflow (the job requests it explicitly).
-3. **Cutover checklist (a separate decision; do in order):**
-   1. Merge `v4` into `main` (PR, CI green on all three OSes).
-   2. In the same or a follow-up PR on `main`: delete `anycli-launcher.bash`, `tests/`, `.shellcheckrc` (only used by the v3 suite), `VERSION` (v4 versions come from tags), and `.github/workflows/cross-platform-tests.yml`. Drop the `tests/.mock-bin/`/`tests/.test.log` lines from `.gitignore`. Grep README/docs for `anycli-launcher.bash`.
-   3. Tag on `main`: `git tag -a v4.0.0 -m "v4.0.0" && git push origin v4.0.0`. Watch `release.yml`; the release notes come from the `## 4.0.0` section of CHANGELOG.md.
-   4. Verify: `brew install --cask ericfaris/tap/anycli-launcher` (macOS + Linux), `scoop bucket add ericfaris https://github.com/ericfaris/scoop-bucket && scoop install anycli-launcher`, `curl -fsSL https://github.com/ericfaris/anycli-launcher/releases/latest/download/install.sh | sh`, `irm .../install.ps1 | iex`, `go install github.com/ericfaris/anycli-launcher/v4/cmd/ac@latest` (the proxy may lag a few minutes), and `cosign verify-blob` per README. On macOS check Gatekeeper doesn't block the cask's `ac` (the postflight strips quarantine).
-   5. Close issue #10 (macOS v3 failures) as obsolete with v3 retired, and mention the `v3` branch for anyone who needs it.
+3. **Cutover:** merged and v3 files deleted. Remaining: tag `v4.0.0` (`git tag -a v4.0.0 -m "v4.0.0" && git push origin v4.0.0`), watch `release.yml`, then verify each install method and `cosign verify-blob` per README; on macOS check Gatekeeper doesn't block the cask's `ac`. Issue #10 is obsolete (v3 retired).
 4. Manual checks for phase 4 on a real terminal:
    - `ac <p> --task "..."` with backend tmux: attach, `w` shows running, leave it quiet 10 min -> idle, Enter from the view re-attaches (and switch-client from inside tmux).
    - zellij task: `list-sessions` parsing (EXITED marker), attach from the view.

@@ -1,8 +1,3 @@
-# Test-generated artifacts (recreated on every test run; cleaned up on success,
-# but left behind if a run is interrupted).
-tests/.mock-bin/
-tests/.test.log
-
 # go build output
 dist/
 
@@ -11,3 +6,4 @@ dist/
 # companion. They carry no content, and their literal colon makes Git for
 # Windows refuse to check the tree out at all ("invalid path").
 *:Zone.Identifier
+.claude/worktrees/

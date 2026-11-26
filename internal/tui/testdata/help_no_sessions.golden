@@ -1,0 +1,18 @@
+
+  ╭────────────────────────────────────╮
+  │  anycli-launcher           v4.0.0  │
+  ╰────────────────────────────────────╯
+
+  Keys
+
+    <N> Enter   open entry N (selects at once when unambiguous)
+    ↑ ↓ / j k   move, Enter to open
+    x<N>        remove project N (asks first)
+    n           new project
+    c           edit config
+    Esc         clear input / close help / quit
+    q           quit
+
+    ? to go back
+
+  › 

@@ -1,0 +1,15 @@
+
+  [1m╭────────────────────────────────────╮[0m
+  [1m│[0m  [1manycli-launcher[0m           [2mv4.0.0[0m  [1m│[0m
+  [1m│[0m  [2mclaude[0m                          [2m[0m  [1m│[0m
+  [1m╰────────────────────────────────────╯[0m
+
+ [1;4;4m▸[0m [1m 1[0m  ● terminal
+   [1m 2[0m  ● projects (root)
+   [1m 3[0m  ● .claude (config)
+   [1m 4[0m  alpha
+   [1m 5[0m  ML
+
+    [1mc[0m config   [1mn[0m new   [1mx<N>[0m remove   [1m?[0m help   [1mq[0m quit
+
+  [1m›[0m 

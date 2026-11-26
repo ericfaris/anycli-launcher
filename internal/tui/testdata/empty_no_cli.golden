@@ -1,0 +1,13 @@
+
+  ╭────────────────────────────────────╮
+  │  anycli-launcher           v4.0.0  │
+  ╰────────────────────────────────────╯
+
+ ▸  1  ● terminal
+    2  ● projects (root)
+    3  ● .claude (config)
+     no projects yet (n to create one)
+
+    c config   n new   x<N> remove   ? help   q quit
+
+  › 

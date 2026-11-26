@@ -1,0 +1,21 @@
+
+  ╭────────────────────────────────────╮
+  │  anycli-launcher           v4.0.0  │
+  │  claude                            │
+  ╰────────────────────────────────────╯
+
+  Keys
+
+    <N> Enter   open entry N (selects at once when unambiguous)
+    ↑ ↓ / j k   move, Enter to open
+    r<N>        resume project N's most recent session
+    p<N>        pick a session to resume for project N
+    x<N>        remove project N (asks first)
+    n           new project
+    c           edit config
+    Esc         clear input / close help / quit
+    q           quit
+
+    ? to go back
+
+  › 

@@ -1,10 +1,3 @@
-# Force LF line endings repo-wide. This used to cover only *.bash/*.sh, but
-# test fixtures (tests/fixtures/*.yaml etc.) need it just as much: Git for
-# Windows checks "text" files out with CRLF by default, and a trailing \r on
-# every line of a config fixture silently breaks every key the parser tries
-# to match against it (project names, flags, ...) -- a whole class of test
-# failures that only shows up on a real Windows checkout, never on Linux/macOS
-# or from a tarball/zip download.
-* text=auto eol=lf
-*.bash text eol=lf
-*.sh text eol=lf
+# Golden files and fixtures are compared byte-for-byte; keep LF on Windows.
+*.golden text eol=lf
+tests/fixtures/** text eol=lf

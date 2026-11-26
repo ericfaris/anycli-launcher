@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/frecency"
-	"github.com/ericfaris/anycli-launcher/internal/tui"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/frecency"
+	"github.com/ericfaris/anycli-launcher/v4/internal/tui"
 )
 
 func (h *harness) history() map[string]float64 {

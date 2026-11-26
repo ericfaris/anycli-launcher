@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
 )
 
 // Regression tests for the v3 3.3.0/3.3.1 removal guards. Each of these

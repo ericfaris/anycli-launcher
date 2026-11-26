@@ -9,9 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/ericfaris/anycli-launcher/internal/app"
-	"github.com/ericfaris/anycli-launcher/internal/clis"
-	"github.com/ericfaris/anycli-launcher/internal/tui"
+	"github.com/ericfaris/anycli-launcher/v4/internal/app"
+	"github.com/ericfaris/anycli-launcher/v4/internal/clis"
+	"github.com/ericfaris/anycli-launcher/v4/internal/tui"
 )
 
 func main() {

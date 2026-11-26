@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
 )
 
 func mkdirs(t *testing.T, root string, rels ...string) {

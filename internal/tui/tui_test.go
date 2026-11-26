@@ -12,8 +12,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/ericfaris/anycli-launcher/internal/clis"
-	"github.com/ericfaris/anycli-launcher/internal/projects"
+	"github.com/ericfaris/anycli-launcher/v4/internal/clis"
+	"github.com/ericfaris/anycli-launcher/v4/internal/projects"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")

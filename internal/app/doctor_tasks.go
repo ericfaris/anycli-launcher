@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/worktree"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/worktree"
 )
 
 // doctorTasks reports the worktree dir, git's worktree support and the

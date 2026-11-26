@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/projects"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/projects"
 )
 
 // SafeToRemove reports why dir must not be deleted, or nil when it is a

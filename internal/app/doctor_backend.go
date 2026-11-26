@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/launch"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/launch"
 )
 
 // doctorBackends reports the backend setting, the detected tab terminal,

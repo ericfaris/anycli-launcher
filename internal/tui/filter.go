@@ -7,8 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/ericfaris/anycli-launcher/internal/frecency"
-	"github.com/ericfaris/anycli-launcher/internal/fuzzy"
+	"github.com/ericfaris/anycli-launcher/v4/internal/frecency"
+	"github.com/ericfaris/anycli-launcher/v4/internal/fuzzy"
 )
 
 // Type-to-filter. In filter mode every printable key is filter text

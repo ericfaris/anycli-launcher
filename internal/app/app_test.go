@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/launch"
-	"github.com/ericfaris/anycli-launcher/internal/tui"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/launch"
+	"github.com/ericfaris/anycli-launcher/v4/internal/tui"
 )
 
 func TestVersionHelpInit(t *testing.T) {

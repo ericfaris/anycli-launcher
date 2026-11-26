@@ -1,4 +1,4 @@
-module github.com/ericfaris/anycli-launcher
+module github.com/ericfaris/anycli-launcher/v4
 
 go 1.26
 

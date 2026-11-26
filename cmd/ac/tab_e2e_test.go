@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
 )
 
 // fakeTerminal plays `kitty @ launch --type=tab --cwd D [--tab-title T] cmd...`.

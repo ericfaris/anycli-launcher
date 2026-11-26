@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ericfaris/anycli-launcher/internal/clis"
-	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/clis"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
 )
 
 // rootCandidates are common project roots that exist and have at least one

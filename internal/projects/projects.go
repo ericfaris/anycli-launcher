@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/frecency"
-	"github.com/ericfaris/anycli-launcher/internal/fuzzy"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/frecency"
+	"github.com/ericfaris/anycli-launcher/v4/internal/fuzzy"
 )
 
 // Project is one launchable directory.

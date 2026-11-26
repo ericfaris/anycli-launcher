@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
 )
 
 func TestTaskE2E(t *testing.T) {

@@ -15,14 +15,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ericfaris/anycli-launcher/internal/clis"
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/frecency"
-	"github.com/ericfaris/anycli-launcher/internal/launch"
-	"github.com/ericfaris/anycli-launcher/internal/projects"
-	"github.com/ericfaris/anycli-launcher/internal/shim"
-	"github.com/ericfaris/anycli-launcher/internal/tui"
-	"github.com/ericfaris/anycli-launcher/internal/worktree"
+	"github.com/ericfaris/anycli-launcher/v4/internal/clis"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/frecency"
+	"github.com/ericfaris/anycli-launcher/v4/internal/launch"
+	"github.com/ericfaris/anycli-launcher/v4/internal/projects"
+	"github.com/ericfaris/anycli-launcher/v4/internal/shim"
+	"github.com/ericfaris/anycli-launcher/v4/internal/tui"
+	"github.com/ericfaris/anycli-launcher/v4/internal/worktree"
 )
 
 // Version is set at build time with -ldflags "-X .../internal/app.Version=...".

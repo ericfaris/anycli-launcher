@@ -8,10 +8,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/launch"
-	"github.com/ericfaris/anycli-launcher/internal/tui"
-	"github.com/ericfaris/anycli-launcher/internal/worktree"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/launch"
+	"github.com/ericfaris/anycli-launcher/v4/internal/tui"
+	"github.com/ericfaris/anycli-launcher/v4/internal/worktree"
 )
 
 // taskInfo is one task with its live status and git state.

@@ -24,8 +24,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/ericfaris/anycli-launcher/internal/clis"
-	"github.com/ericfaris/anycli-launcher/internal/projects"
+	"github.com/ericfaris/anycli-launcher/v4/internal/clis"
+	"github.com/ericfaris/anycli-launcher/v4/internal/projects"
 )
 
 // Kind is an entry type.

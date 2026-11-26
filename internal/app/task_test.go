@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/launch"
-	"github.com/ericfaris/anycli-launcher/internal/tui"
-	"github.com/ericfaris/anycli-launcher/internal/worktree"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/launch"
+	"github.com/ericfaris/anycli-launcher/v4/internal/tui"
+	"github.com/ericfaris/anycli-launcher/v4/internal/worktree"
 )
 
 // taskHarness is a harness whose git ignores the machine's config and has

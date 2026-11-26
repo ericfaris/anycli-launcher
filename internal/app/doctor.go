@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ericfaris/anycli-launcher/internal/clis"
-	"github.com/ericfaris/anycli-launcher/internal/config"
-	"github.com/ericfaris/anycli-launcher/internal/frecency"
-	"github.com/ericfaris/anycli-launcher/internal/projects"
-	"github.com/ericfaris/anycli-launcher/internal/tui"
+	"github.com/ericfaris/anycli-launcher/v4/internal/clis"
+	"github.com/ericfaris/anycli-launcher/v4/internal/config"
+	"github.com/ericfaris/anycli-launcher/v4/internal/frecency"
+	"github.com/ericfaris/anycli-launcher/v4/internal/projects"
+	"github.com/ericfaris/anycli-launcher/v4/internal/tui"
 )
 
 type report struct {

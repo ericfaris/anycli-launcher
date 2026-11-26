@@ -19,6 +19,10 @@ func TestVersionHelpInit(t *testing.T) {
 			t.Errorf("%s: %q", a, h.out.String())
 		}
 	}
+	// The harness pins the binary to ~/.local/bin: the install-script hint.
+	if h.run("--version") != 0 || !strings.Contains(h.out.String(), "update (install script): curl -fsSL https://github.com/ericfaris/anycli-launcher/releases/latest/download/install.sh | sh") {
+		t.Errorf("--version update hint: %q", h.out.String())
+	}
 	for _, a := range []string{"help", "--help", "-h"} {
 		if h.run(a) != 0 || !strings.Contains(h.out.String(), "ac init <bash|zsh|fish|pwsh>") {
 			t.Errorf("%s: %q", a, h.out.String())

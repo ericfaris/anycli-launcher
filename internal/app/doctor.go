@@ -153,6 +153,9 @@ func (a *app) doctor() int {
 	r.section("Task worktrees")
 	a.doctorTasks(r)
 
+	r.section("Version")
+	a.doctorInstall(r)
+
 	a.printf("\n")
 	if r.fails == 0 {
 		a.printf("✓ Healthy")

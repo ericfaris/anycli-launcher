@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ericfaris/anycli-launcher/v4/internal/buildinfo"
 	"github.com/ericfaris/anycli-launcher/v4/internal/clis"
 	"github.com/ericfaris/anycli-launcher/v4/internal/config"
 	"github.com/ericfaris/anycli-launcher/v4/internal/frecency"
@@ -25,8 +26,9 @@ import (
 	"github.com/ericfaris/anycli-launcher/v4/internal/worktree"
 )
 
-// Version is set at build time with -ldflags "-X .../internal/app.Version=...".
-var Version = "4.0.0-dev"
+// Version is this build's version (see internal/buildinfo for how release
+// builds stamp it).
+var Version = buildinfo.Get().Version
 
 // Env is the outside world.
 type Env struct {
@@ -57,6 +59,9 @@ type Env struct {
 	// Probe checks task liveness (zero value: real tmux/zellij/process
 	// checks, with LookPath from this Env).
 	Probe worktree.Probe
+	// Install is what install-method detection reads (zero value: the
+	// running binary and real environment).
+	Install buildinfo.Host
 }
 
 // DefaultRun runs a command and returns trimmed stdout. A failure's error
@@ -250,8 +255,7 @@ func (a *app) dispatch(args []string) int {
 			a.usage(a.env.Stdout)
 			return 0
 		case "-V", "--version":
-			a.printf("anycli-launcher %s\n", Version)
-			return 0
+			return a.version()
 		case "init":
 			return a.cmdInit(args[1:])
 		}
@@ -291,8 +295,7 @@ func (a *app) dispatch(args []string) int {
 		a.usage(a.env.Stdout)
 		return 0
 	case "version":
-		a.printf("anycli-launcher %s\n", Version)
-		return 0
+		return a.version()
 	case "-l", "--list", "list":
 		return a.list()
 	case "doctor":

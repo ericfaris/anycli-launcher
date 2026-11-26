@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ericfaris/anycli-launcher/v4/internal/buildinfo"
 	"github.com/ericfaris/anycli-launcher/v4/internal/config"
 	"github.com/ericfaris/anycli-launcher/v4/internal/launch"
 	"github.com/ericfaris/anycli-launcher/v4/internal/tui"
@@ -93,6 +94,10 @@ func newHarness(t *testing.T) *harness {
 		Stderr:     h.err,
 		ConfigPath: h.cfgPath,
 		Home:       home,
+		// A fixed install location, so the update hint never depends on
+		// where the test binary or this machine's GOPATH happen to be.
+		Install: buildinfo.Host{Exe: filepath.Join(home, ".local", "bin", "ac"), GOOS: "linux", Home: home,
+			Getenv: func(string) string { return "" }},
 		LookPath: func(n string) (string, error) {
 			if h.onPath[n] {
 				if n == "git" {

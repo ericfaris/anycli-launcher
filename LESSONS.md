@@ -37,3 +37,9 @@
 - **Local `~/.local/go` was broken** by extracting 1.27.4 over an older tree,
   which left stale `src/internal/strconv` files. Always `rm -rf` the old GOROOT
   before extracting.
+
+## 2026-11-26: pwsh install line broke on Windows and macOS
+
+- `ac init pwsh` can't bootstrap via the name `ac`: Windows PowerShell has a built-in `ac` alias (Add-Content), and macOS has `/usr/sbin/ac`. Resolve the binary with `Get-Command ac -CommandType Application | Select-Object -First 1`.
+- A "green locally" shim test proved nothing: only the Windows/macOS CI runners exposed it. Keep the OS matrix for the shim smoke test.
+- Extracting a Go tarball over an existing `~/.local/go` leaves stale files that break builds; remove the old tree first.

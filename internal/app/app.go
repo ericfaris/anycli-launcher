@@ -22,6 +22,7 @@ import (
 	"github.com/ericfaris/anycli-launcher/internal/projects"
 	"github.com/ericfaris/anycli-launcher/internal/shim"
 	"github.com/ericfaris/anycli-launcher/internal/tui"
+	"github.com/ericfaris/anycli-launcher/internal/worktree"
 )
 
 // Version is set at build time with -ldflags "-X .../internal/app.Version=...".
@@ -50,13 +51,26 @@ type Env struct {
 	FrecencyPath string
 	// Now is the clock for frecency (default time.Now).
 	Now func() time.Time
+	// TasksPath is the task-session registry (default $AC_TASKS_FILE, else
+	// tasks.json next to the frecency history).
+	TasksPath string
+	// Probe checks task liveness (zero value: real tmux/zellij/process
+	// checks, with LookPath from this Env).
+	Probe worktree.Probe
 }
 
-// DefaultRun runs a command and returns trimmed stdout.
+// DefaultRun runs a command and returns trimmed stdout. A failure's error
+// includes the command's stderr (git's "fatal: ..." reason).
 func DefaultRun(dir, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+			err = fmt.Errorf("%w: %s", err, msg)
+		}
+	}
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -92,6 +106,12 @@ func Main(args []string, env *Env) int {
 	}
 	if a.env.Now == nil {
 		a.env.Now = time.Now
+	}
+	if a.env.TasksPath == "" {
+		a.env.TasksPath = os.Getenv("AC_TASKS_FILE")
+		if a.env.TasksPath == "" {
+			a.env.TasksPath = filepath.Join(filepath.Dir(a.env.FrecencyPath), "tasks.json")
+		}
 	}
 	if a.env.NewBackend == nil {
 		a.env.NewBackend = launch.New
@@ -187,17 +207,37 @@ func legacySource(tomlPath string) string {
 var wordCommands = map[string]bool{
 	"help": true, "version": true, "list": true, "config": true,
 	"doctor": true, "setup": true, "resume": true, "pick": true,
+	"task": true, "running": true, "ls-tasks": true, "finish": true, "prune": true,
 }
 
 func (a *app) dispatch(args []string) int {
 	mode := clis.Fresh
 	var rest []string
-	for _, x := range args {
-		switch x {
-		case "--resume-picker":
+	var task *string
+	base, hasBase := "", false
+	for i := 0; i < len(args); i++ {
+		x := args[i]
+		switch {
+		case x == "--resume-picker":
 			mode = clis.Picker
-		case "--resume", "-r":
+		case x == "--resume", x == "-r":
 			mode = clis.Resume
+		case x == "--task", x == "--base":
+			if i+1 >= len(args) {
+				return a.fail(2, fmt.Errorf("%s needs a value", x))
+			}
+			v := args[i+1]
+			i++
+			if x == "--task" {
+				task = &v
+			} else {
+				base, hasBase = v, true
+			}
+		case strings.HasPrefix(x, "--task="):
+			v := strings.TrimPrefix(x, "--task=")
+			task = &v
+		case strings.HasPrefix(x, "--base="):
+			base, hasBase = strings.TrimPrefix(x, "--base="), true
 		default:
 			rest = append(rest, x)
 		}
@@ -218,6 +258,22 @@ func (a *app) dispatch(args []string) int {
 	}
 	if err := a.load(); err != nil {
 		return a.fail(1, err)
+	}
+	if task != nil || hasBase {
+		isTaskCmd := len(args) > 0 && args[0] == "task" && !projects.ExactExists(projects.Discover(a.cfg), "task")
+		switch {
+		case mode != clis.Fresh:
+			return a.fail(2, errors.New("--task starts a new session; it can't be combined with --resume"))
+		case task == nil && !isTaskCmd:
+			return a.fail(2, errors.New("--base needs --task (usage: ac <project> --task \"...\" [--base <ref>])"))
+		case task != nil && isTaskCmd:
+			return a.fail(2, errors.New("use either 'ac task <project> \"...\"' or 'ac <project> --task \"...\"'"))
+		case task != nil:
+			if len(args) != 1 {
+				return a.fail(2, errors.New("usage: ac <project> --task \"description\" [--base <ref>]"))
+			}
+			return a.startTask(args[0], *task, base)
+		}
 	}
 	if len(args) == 0 {
 		if mode != clis.Fresh {
@@ -272,6 +328,20 @@ func (a *app) dispatch(args []string) int {
 			return a.fail(2, errors.New("-- needs a project name"))
 		}
 		return a.launchByName(args[1], mode)
+	case "task":
+		if mode != clis.Fresh {
+			return a.fail(2, errors.New("a task starts a new session; it can't be combined with --resume"))
+		}
+		if len(args) < 3 {
+			return a.fail(2, errors.New("usage: ac task <project> \"description\" [--base <ref>]"))
+		}
+		return a.startTask(args[1], strings.Join(args[2:], " "), base)
+	case "running", "ls-tasks":
+		return a.cmdRunning()
+	case "finish":
+		return a.cmdFinish(args[1:])
+	case "prune":
+		return a.cmdPrune()
 	}
 	if strings.HasPrefix(cmd, "-") {
 		a.eprintf("ac: unknown option: %s\n", cmd)
@@ -331,14 +401,33 @@ func (a *app) launchProject(p projects.Project, mode clis.Mode) int {
 	return a.launchDir(p.Dir, session, p.Settings, mode)
 }
 
-// launchDir launches the CLI in dir with the given settings. session names
-// the project for tmux/zellij.
-func (a *app) launchDir(dir, session string, s config.Project, mode clis.Mode) int {
-	cli := a.cfg.CLI
-	launchOverride := a.cfg.CLILaunch
+// cliFor is the CLI a project launches and its cli_launch override (a
+// project-level cli drops the global override).
+func (a *app) cliFor(s config.Project) (cli, launchOverride string) {
+	cli, launchOverride = a.cfg.CLI, a.cfg.CLILaunch
 	if s.CLI != "" && s.CLI != cli {
 		cli, launchOverride = s.CLI, ""
 	}
+	return cli, launchOverride
+}
+
+// launchHook lets a task launch see which backend runs it and record the
+// CLI's pid. The zero value is a plain launch.
+type launchHook struct {
+	pidFile string
+	// onBackend is called with the concrete backend right before each
+	// launch attempt (again with "here" on a fallback).
+	onBackend func(name string)
+}
+
+// launchDir launches the CLI in dir with the given settings. session names
+// the project for tmux/zellij.
+func (a *app) launchDir(dir, session string, s config.Project, mode clis.Mode) int {
+	return a.launchDirWith(dir, session, s, mode, launchHook{})
+}
+
+func (a *app) launchDirWith(dir, session string, s config.Project, mode clis.Mode, hook launchHook) int {
+	cli, launchOverride := a.cliFor(s)
 	if cli == "" {
 		return a.fail(1, errors.New("no AI CLI configured yet; run 'ac setup'"))
 	}
@@ -356,16 +445,22 @@ func (a *app) launchDir(dir, session string, s config.Project, mode clis.Mode) i
 	}
 	req := launch.Request{
 		Dir: dir, Name: cli, Args: inv.Args, Title: s.Title, CDFile: a.cdFile,
-		Color: color, Session: session, Resume: mode != clis.Fresh,
+		Color: color, Session: session, Resume: mode != clis.Fresh, PIDFile: hook.pidFile,
 	}
 	setting, explicit := a.backendSetting(s)
 	name := launch.Choose(setting, s.Color != "" || s.Title != "")
+	if hook.onBackend != nil {
+		hook.onBackend(name)
+	}
 	code, err := a.env.NewBackend(name, a.launchDeps()).Launch(req)
 	if errors.Is(err, launch.ErrUnavailable) && name != launch.BackendHere {
 		// v3 parity: no usable terminal means the current tab. Say so only
 		// when the backend was asked for by name.
 		if explicit {
 			a.eprintf("ac: %s backend unavailable (%s); launching here\n", name, unwrapUnavailable(err))
+		}
+		if hook.onBackend != nil {
+			hook.onBackend(launch.BackendHere)
 		}
 		code, err = a.env.NewBackend(launch.BackendHere, a.launchDeps()).Launch(req)
 	}
@@ -590,6 +685,8 @@ func (a *app) menu() int {
 			CanPick:   len(prof.Picker) > 0,
 			Backend:   a.backendLabel(),
 			Theme:     tui.NewTheme(a.cfg.Theme, nil),
+			TaskCount: a.taskCount(),
+			LoadTasks: a.taskRows,
 		})
 		if err != nil {
 			return a.fail(1, err)
@@ -604,6 +701,12 @@ func (a *app) menu() int {
 		case tui.ActRemove:
 			if p, ok := byDir(list, res.Entry.Dir); ok {
 				a.removeProject(p)
+			}
+		case tui.ActTaskOpen:
+			return a.openTask(res.Task)
+		case tui.ActTaskFinish:
+			if t, ok := a.findTask(res.Task); ok {
+				a.finishTask(t, false)
 			}
 		case tui.ActSelect:
 			switch res.Entry.Kind {
@@ -663,6 +766,13 @@ Usage:
   ac --backend <b> <name>  launch via b: here, tab, tmux, zellij or auto
                            (auto: a new tab when the project sets a color
                            or title, else here)
+  ac <name> --task "..."   new git worktree on branch ac/<slug>, CLI started
+                           there with the task as its prompt (--base <ref>)
+  ac task <name> "..."     same as --task
+  ac running | ls-tasks    list task sessions (status, branch, git state)
+  ac finish <task> [--delete-branch]
+                           remove a task's worktree (asks; keeps the branch)
+  ac prune                 forget tasks whose worktree is gone
   ac resume <name>         same as --resume
   ac pick <name>           same as --resume-picker
   ac list                  list projects (name, or name<TAB>label)
@@ -678,7 +788,8 @@ Usage:
 <name> matches a directory name or alias: exact, case-insensitive, prefix,
 substring, then fuzzy (letters in order). When several prefix/substring/fuzzy
 matches remain, the one you launch most (frecency) wins. A project named like help/list/config/doctor/setup/resume/
-pick/version takes precedence over that subcommand.
+pick/version/task/running/ls-tasks/finish/prune takes precedence over that
+subcommand.
 
 Shell integration (needed for ac to cd your shell):
   bash/zsh: eval "$(ac init bash)"     fish: ac init fish | source

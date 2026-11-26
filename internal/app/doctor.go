@@ -150,6 +150,9 @@ func (a *app) doctor() int {
 	r.section("Launch backend")
 	a.doctorBackends(r)
 
+	r.section("Task worktrees")
+	a.doctorTasks(r)
+
 	a.printf("\n")
 	if r.fails == 0 {
 		a.printf("✓ Healthy")

@@ -84,6 +84,10 @@ dropped: tracked apps, show_sessions, and Windows Terminal theme names.
 | `ac <name> -r` / `--resume`, `ac resume <name>` | Resume the most recent session |
 | `ac <name> --resume-picker`, `ac pick <name>` | Open the CLI's own session picker |
 | `ac --backend <b> <name>` | Launch through backend `b` this once: `here`, `tab`, `tmux`, `zellij`, `auto` (see [Backends](#backends)) |
+| `ac <name> --task "..."` [`--base <ref>`], `ac task <name> "..."` | Start a task session: a new git worktree on branch `ac/<slug>`, the CLI launched there with the task as its prompt (see [Task sessions](#task-sessions)) |
+| `ac running`, `ac ls-tasks` | List task sessions: branch, age, status, git state, backend |
+| `ac finish <task> [--delete-branch]` | Remove a task's worktree (asks first; keeps the branch unless told) |
+| `ac prune` | Forget task sessions whose worktree folder is gone |
 | `ac list` | List projects (`name` or `name<TAB>label`) |
 | `ac new [name]` | Create a folder in the root, `git init` it, optionally set alias/color/title/prompt, then cd there |
 | `ac remove <name>` | Delete a project folder (see below). Needs the exact name or label. |
@@ -93,9 +97,10 @@ dropped: tracked apps, show_sessions, and Windows Terminal theme names.
 | `ac migrate` | Import a v3 config |
 | `ac init <shell>` | Print the shell integration |
 
-A project named `help`, `version`, `list`, `config`, `doctor`, `setup`, `resume`
-or `pick` wins over the subcommand, as in v3. `init`, `new`, `remove` and
-`migrate` are always subcommands.
+A project named `help`, `version`, `list`, `config`, `doctor`, `setup`, `resume`,
+`pick`, `task`, `running`, `ls-tasks`, `finish` or `prune` wins over the
+subcommand, as in v3. `init`, `new`, `remove` and `migrate` are always
+subcommands.
 
 ### Name matching
 
@@ -135,6 +140,7 @@ name order. `ac list` is always in name order.
 | ↑ ↓ / `j` `k`, Enter | move and open |
 | `n` | new project |
 | `c` | edit config |
+| `w` | task sessions (the running view, below) |
 | `/` | filter by name |
 | any other letter | start the filter with that letter |
 | `?` | key help |
@@ -155,6 +161,10 @@ the filter only when it isn't a menu key at an empty prompt:
   instead, both letters become the filter (`ru` filters for `rust`).
 - To filter for a name that starts with `n`, `c`, `q`, `j` or `k`, press `/`
   first (`/kiro`).
+- `w` opens the running view, but if the very next key is a letter that
+  isn't a running-view key, both letters become the filter, so `web` still
+  filters. Only `wj`, `wk`, `wf`, `wr`, `wq`, `ww` and `w<digit>` need `/`
+  (`/wf`). `W` (capital) starts the filter as before.
 - Once the filter is open, every key you type is text, digits and command
   letters included, until Esc or until you backspace it empty.
 
@@ -172,6 +182,76 @@ the filter only when it isn't a menu key at an empty prompt:
   deleted; otherwise the whole removal is cancelled. Non-GitHub remotes are
   left alone.
 - Drops the project's entry from `config.toml`.
+
+### Task sessions
+
+Run an agent on a task in its own checkout, so it can't trample your working
+copy and several can run at once:
+
+```sh
+ac api --task "Fix the login redirect loop"        # or: ac task api "..."
+ac api --task "Try the new parser" --base feature  # start from another ref
+```
+
+1. `ac` creates a git worktree on a new branch `ac/<slug>` (from the task:
+   `ac/fix-the-login-redirect-loop`; `-2`, `-3`, ... when a branch, folder or
+   task by that name exists), starting at the project's `HEAD` or `--base`.
+2. It lives in `worktree_dir`, by default `<projects_dir>/.ac-worktrees/<project>/<slug>`.
+   Discovery never lists it as a project, even if you point `worktree_dir` at
+   a visible folder inside a root. `worktree_dir` may not be (or contain) a
+   project root.
+3. The CLI starts in the worktree through the usual [backend](#backends), with
+   the task as its initial prompt. Each session is recorded in
+   `tasks.json` next to the frecency history (`$AC_TASKS_FILE` overrides).
+
+The project must be a git repository with at least one commit. Git always gets
+its arguments directly (never through a shell), the branch and folder come
+from the slug (lowercase letters, digits and `-`), and `--base` must name a
+commit and can't start with `-`. A task can't start with `-` either, since the
+CLI would read it as an option.
+
+`ac running` (or `w` in the menu) shows every task:
+
+```
+TASK           BRANCH        AGE  STATUS    GIT                    BACKEND
+api/fix-login  ac/fix-login  2h   running   dirty ↑2 (2 unpushed)  tmux api_fix-login-1a2b
+web/add-tests  ac/add-tests  3d   finished  clean                  here
+```
+
+Status is never a guess:
+
+| Status | Meaning |
+|---|---|
+| `running` | the tmux/zellij session exists, or the recorded pid is alive (on Linux also checked to be inside the worktree, so a reused pid doesn't count) |
+| `idle` | tmux only: the session exists but printed nothing for 10 minutes |
+| `finished` | the session is gone, or the process exited |
+| `unknown` | can't tell: tmux/zellij not installed, or no pid was recorded |
+
+Here and tab launches record the CLI's pid (a tab's trampoline writes it just
+before it execs the CLI).
+
+In the running view: ↑ ↓ / `j` `k` move, `<N>` or Enter opens a task
+(attaches to its tmux/zellij session when it is alive, else cds into the
+worktree), `f` finishes it, `r` refreshes, Esc or `w` goes back, `q` quits.
+
+`ac finish <task>` (the id, branch, or slug; `f` in the view):
+
+- Refuses anything that isn't a real folder inside `worktree_dir` (checked
+  both as written and with symlinks resolved; a worktree path that is itself a
+  symlink is refused) and that git doesn't list as a worktree of the task's
+  repository. It removes it with `git worktree remove`, never a recursive
+  delete.
+- Shows the branch, status and git state. With uncommitted changes, commits
+  on no remote, an unreadable git state, or the CLI still running, you must
+  type the branch name to confirm. Otherwise it asks y/N (default no).
+- Keeps the branch (`--delete-branch` deletes it; only `ac/...` branches) and
+  prints how to merge it: `git -C <repo> merge ac/<slug>`, or push it for a
+  review.
+- If the worktree folder is already gone, it just forgets the task.
+
+`ac prune` forgets every task whose worktree folder is gone (and runs `git
+worktree prune` in its repo). Branches are kept. `ac doctor` reports the
+worktree dir, whether git supports worktrees (2.17+), and the registry.
 
 ## Configuration
 
@@ -192,6 +272,7 @@ sort_order = "name"            # name | recent (frecency, alias "frecent")
 backend = "auto"               # auto | here | tab | tmux | zellij (see Backends)
 terminal = ""                  # force the tab terminal: wt | iterm | terminal-app |
                                #   kitty | wezterm | gnome-terminal ("" = detect)
+worktree_dir = ""              # task worktrees ("" = <projects_dir>/.ac-worktrees)
 
 [projects.my-app]
 alias = "App"                  # menu label
@@ -295,11 +376,13 @@ CI (`.github/workflows/go.yml`) runs `go test` on Linux, macOS and Windows, and
 the shim smoke test in bash and zsh (Linux, plus macOS's bash 3.2) and pwsh
 (Windows). `TestTmuxIntegration` drives a real tmux on a private socket when
 tmux is installed, and `TestTabBackendE2E` runs a whole tab launch through a
-fake terminal. The plan for later releases (worktree agents, packaging) is in
-`docs/V4-PLAN.md`.
+fake terminal. `TestTaskE2E` runs a task session through the real binary and
+real git, and `TestTmuxLiveness` checks task status against a real tmux.
+The plan for the next release (packaging) is in `docs/V4-PLAN.md`.
 
-Tests never touch your real history: the app tests pass
-`Env.FrecencyPath`, and the shim e2e test sets `AC_FRECENCY_FILE`.
+Tests never touch your real history or task registry: the app tests pass
+`Env.FrecencyPath` (the registry sits next to it), and the e2e tests set
+`AC_FRECENCY_FILE`.
 
 ## License
 

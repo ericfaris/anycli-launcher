@@ -1,7 +1,7 @@
 # Handoff: anycli-launcher
 
 **What:** `ac` picks a project, cds into it, and launches an AI CLI.
-- v4: Go rewrite on branch `v4` (phases 1-2: core, frecency, filter). Phase 3 (pluggable backends: tab, tmux, zellij) is on branch `v4-phase3`, pushed and not yet merged into `v4`. See `docs/V4-PLAN.md`.
+- v4: Go rewrite on branch `v4` (phases 1-3: core, frecency, filter, backends). Phase 4 (task worktrees + running view) is on branch `v4-phase4`, pushed and not yet merged into `v4`. See `docs/V4-PLAN.md`.
 - v3: 5k-line bash (`anycli-launcher.bash`), on branch `v3` and still on `main` until v4 lands. The v3 files are still in the v4 tree; delete them at cutover.
 
 ## Layout (v4)
@@ -18,27 +18,37 @@
   - `tab.go`: `BuildTab` (pure argv per terminal), `Tab` backend, spec files.
   - `tabexec.go` + `exec_unix.go`/`exec_other.go`: the `ac __tab-exec <spec>` trampoline (login re-exec through `bash -l`, cd, OSC title, iTerm2 color, TTY drain, exec).
   - `tmux.go`, `zellij.go`: `PlanTmux`/`PlanZellij` (pure) + backends. `quote.go`: ShQuote, AppleScript, KDL, tmux-format and wt escaping.
+  - `attach.go`: `PlanAttach`/`Attach` (attach-only, for opening a live task session). `Request.PIDFile`: Here writes the child's pid, the tab trampoline its own (just before exec).
+- `internal/worktree` (phase 4): `slug.go` (Slug, SafeComponent, Unique, ValidBranch: only `ac/[a-z0-9-]`), `git.go` (argv-only git: TopLevel, ResolveBase, Add, List/Find by SameFile, Remove, DeleteBranch, Prune, Status, Version), `guard.go` (CheckPath: inside worktree_dir lexically and resolved, not a symlink; CheckRoot), `registry.go` (tasks.json: atomic, lock file, corrupt file set aside as `.corrupt-<unix>`, junk ids dropped), `live.go` + `proc_*.go` (Probe: tmux has-session + window_activity for idle, zellij list-sessions, pid alive + Linux /proc cwd check).
+- `internal/app`: `task.go` (startTask), `running.go` (ac running, openTask, finish, prune), `doctor_tasks.go`. `launchDirWith` + `launchHook` record the backend actually used (fallback included) before the CLI starts.
+- `internal/tui/running.go`: the `w` view (`Options.TaskCount`, `Options.LoadTasks` runs async; `ActTaskOpen`/`ActTaskFinish` + `Result.Task`).
 
 ## Commands
 - Test: `go test ./...`. Goldens: `go test ./internal/tui -update`.
 - Shim e2e with required shells: `AC_REQUIRE_SHELLS=bash,zsh go test -run TestShimE2E ./cmd/ac`.
-- tmux integration (auto-skips without tmux): `go test -run TestTmuxIntegration ./internal/launch`.
+- tmux integration (auto-skips without tmux): `go test -run 'TestTmuxIntegration|TestTmuxLiveness' ./internal/launch ./internal/worktree`.
+- Task e2e (real binary + real git): `go test -run TestTaskE2E ./cmd/ac`.
 - Local Go: `PATH=$HOME/.local/go/bin:$PATH` (1.27.4). Docker fallback:
   `docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.27.4 go test ./...`
   (add `--user $(id -u):$(id -g) -e HOME=/tmp` to avoid root-owned files).
 - CI: `.github/workflows/go.yml` (go test on 3 OSes, plus the shim smoke job). It runs on pushes to `main`, `v4` and `v4-*`, and on PRs. The v3 `cross-platform-tests.yml` still runs on main.
 
 ## Open items (priority)
-1. Merge `v4-phase3` into `v4` once CI is green.
-2. Manual checks on real terminals (only unit/e2e-tested with fakes):
+1. Merge `v4-phase4` into `v4` once CI is green.
+2. Manual checks for phase 4 on a real terminal:
+   - `ac <p> --task "..."` with backend tmux: attach, `w` shows running, leave it quiet 10 min -> idle, Enter from the view re-attaches (and switch-client from inside tmux).
+   - zellij task: `list-sessions` parsing (EXITED marker), attach from the view.
+   - tab task (WT from WSL, iTerm2, kitty): the pid file appears and status goes running -> finished when the CLI exits. On native Windows the pid is the trampoline's.
+   - `ac finish` on a dirty worktree with a live tmux session (prints the kill-session hint, does not kill it).
+3. Manual checks on real terminals (only unit/e2e-tested with fakes):
    - Windows Terminal from WSL: `wsl.exe ... --cd <dir> --exec ac __tab-exec <spec>` (v3 used `-- bash -l script`), title, tab color, the TTY drain (no `2c/3434` junk), `-w 0` landing in the current window, dirs with spaces.
    - Windows Terminal native/Git Bash: `-d <dir> -- ac.exe __tab-exec <spec>` with spaces in the user profile path; a `.cmd` CLI shim (npm `claude.cmd`) run by the trampoline.
    - iTerm2 (new tab + `write text`, OSC 6 tab color), Terminal.app (opens a window), kitty (`allow_remote_control`), WezTerm, GNOME Terminal (`--tab` against the running server).
    - zellij: every flag (not installed when written).
    - tmux: real attach/switch-client in a terminal (the integration test stubs only those two calls).
-3. Verify the codex/goose/aider/amp profiles against a real `--help` (only claude is verified).
-4. Phases 4-5 per plan. Delete the v3 bash files at cutover.
-5. Issue #10 (macOS v3 failures): fix only on `v3`, if at all.
+4. Verify the codex/goose/aider/amp profiles against a real `--help` (only claude is verified).
+5. Phase 5 per plan. Delete the v3 bash files at cutover.
+6. Issue #10 (macOS v3 failures): fix only on `v3`, if at all.
 
 ## Decisions that may be revisited
 - Go over modular bash; TOML over YAML; self-update, theme editor and changelog viewer dropped.
@@ -51,7 +61,13 @@
 - Terminal.app gets a new window, not a tab (tabs need System Events + Accessibility).
 - kitty/WezTerm/GNOME get no tab color (no CLI/escape support used); titles come from the trampoline's OSC 0.
 - Phase 2 decisions (filter keys, frecency tiers, recording before launch) are unchanged.
-- Goldens: two new (`menu_backend_auto`, `menu_backend_tmux`); every existing golden is byte-identical.
+- Goldens (phase 3): two new (`menu_backend_auto`, `menu_backend_tmux`).
+- Phase 4: `w` opens the running view; the first key after it, if a letter outside `jkfrqw`, falls back to the filter with `w`+letter (so `web` still filters). `W` still filters. The footer gets `w tasks(N)` only when tasks exist, so menus without tasks are byte-identical. Goldens: `help` and `help_no_sessions` changed on purpose (new `w` row); new `menu_tasks`, `running*`.
+- Task ids are `<SafeComponent(label)>/<slug>`; worktree at `<worktree_dir>/<id>`; tmux session `SessionName(label + "/" + slug)` (separate from the project's own session).
+- `ac finish` asks for the typed branch name when dirty, unpushed, git state unreadable, or the CLI is still running; keeps the branch by default even though unpushed commits aren't lost then (spec). It never kills the tmux/zellij session; it prints the command.
+- `--task` text may not start with `-` (the CLI would parse it as a flag) or contain NUL. `--base` may not start with `-` and is resolved to a SHA before `worktree add`.
+- New word commands (`task running ls-tasks finish prune`) yield to same-named projects, like the v3 ones.
+- Registry lives next to the frecency file (`AC_TASKS_FILE` overrides); writes take a `tasks.json.lock` (O_EXCL, 3s wait, broken after 10s).
 
 ## Gotchas
 - tmux expands `-c` and `-n` as formats: `#(cmd)` in a directory or title runs cmd. `TmuxFormatEscape` doubles `#`. The integration test fails without it.
@@ -61,4 +77,7 @@
 - Tests must never write the real history (`Env.FrecencyPath`, `AC_FRECENCY_FILE`). Windows ignores `HOME` for `os.UserHomeDir`.
 - `Env.LaunchEnv` must be stubbed in app tests: this dev box is WSL with wt.exe on PATH, so real detection says "wt".
 - Never run real wt.exe/osascript from tests; the e2e uses a fake `kitty`.
+- Compare paths git prints with `os.SameFile`, not strings: git resolves symlinks (macOS `/private/var`) and Windows 8.3 names, and uses `/`.
+- Git tests must isolate config: `GIT_CONFIG_GLOBAL=<temp file>`, `GIT_CONFIG_NOSYSTEM=1` (a dev box with `commit.gpgsign` breaks them otherwise).
+- This agent sandbox refuses Bash commands that mention git alongside other complex shell (heredocs, `&&` chains with python); run git commands on their own.
 - See `LESSONS.md` for CI history.

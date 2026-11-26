@@ -10,6 +10,10 @@
 // letter that is not a menu key at an empty prompt starts it implicitly
 // (r/p/x followed by a letter becomes the filter text too, so "rust" still
 // works). See filter.go.
+//
+// "w" opens the running view of task sessions (running.go); a letter right
+// after it that isn't a running-view key turns back into the filter, so
+// "web" still filters.
 package tui
 
 import (
@@ -50,6 +54,10 @@ const (
 	ActNew
 	ActRemove
 	ActConfig
+	// ActTaskOpen / ActTaskFinish come from the running view; Result.Task
+	// is the task id.
+	ActTaskOpen
+	ActTaskFinish
 )
 
 // Result is returned when the menu exits.
@@ -57,6 +65,7 @@ type Result struct {
 	Action Action
 	Entry  Entry
 	Mode   clis.Mode
+	Task   string
 }
 
 // Options configure the menu.
@@ -76,6 +85,11 @@ type Options struct {
 	// Scores are frecency scores keyed by directory (see internal/frecency);
 	// the filter uses them to break ties between equally good matches.
 	Scores map[string]float64
+	// TaskCount is how many task sessions are registered (cheap to know);
+	// when > 0 the footer shows "w tasks". LoadTasks fetches the running
+	// view's rows (liveness and git checks), asynchronously, on "w".
+	TaskCount int
+	LoadTasks func() []TaskRow
 }
 
 // GitMsg delivers git statuses keyed by directory.
@@ -95,6 +109,12 @@ type Model struct {
 	filtering bool
 	filter    string
 	fcursor   int
+	// running is the task-session view (running.go).
+	running     bool
+	runFirst    bool // no key pressed yet since "w"
+	tasks       []TaskRow
+	tasksLoaded bool
+	tcursor     int
 }
 
 // New builds a model.
@@ -129,6 +149,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case GitMsg:
 		m.git = msg
 		return m, nil
+	case TasksMsg:
+		m.tasks, m.tasksLoaded = msg, true
+		if m.tcursor >= len(m.tasks) {
+			m.tcursor = 0
+		}
+		return m, nil
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
@@ -144,6 +170,9 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	if m.filtering {
 		return m.filterKey(k)
+	}
+	if m.running {
+		return m.runningKey(k)
 	}
 	s := k.String()
 	switch s {
@@ -212,6 +241,8 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case m.input == "" && c == '/':
 		return m.startFilter(""), nil
+	case m.input == "" && c == 'w':
+		return m.startRunning()
 	case m.input == "" && isLetter(c):
 		return m.startFilter(s), nil
 	case len(m.input) == 1 && strings.ContainsRune("rpx", rune(m.input[0])) && isLetter(c):
@@ -275,6 +306,8 @@ func (m Model) View() string {
 	switch {
 	case m.filtering:
 		b.WriteString(m.filterView())
+	case m.running:
+		b.WriteString(m.runningView())
 	case m.help:
 		b.WriteString(m.helpView())
 	default:
@@ -346,6 +379,10 @@ func (m Model) listView() string {
 	}
 	b.WriteString("\n")
 	keys := []string{"c config", "n new", "x<N> remove", "? help", "q quit"}
+	if m.opts.TaskCount > 0 {
+		// Only with tasks, so the phase 1-3 footer is unchanged.
+		keys = append(keys[:3:3], append([]string{fmt.Sprintf("w tasks(%d)", m.opts.TaskCount)}, keys[3:]...)...)
+	}
 	var parts []string
 	for _, k := range keys {
 		key, desc, _ := strings.Cut(k, " ")
@@ -380,6 +417,7 @@ func (m Model) helpView() string {
 		[2]string{"x<N>", "remove project N (asks first)"},
 		[2]string{"n", "new project"},
 		[2]string{"c", "edit config"},
+		[2]string{"w", "task sessions (ac <project> --task); /w to filter"},
 		[2]string{"/", "filter by name (or just type a name)"},
 		[2]string{"Esc", "clear input / close help / quit"},
 		[2]string{"q", "quit"},

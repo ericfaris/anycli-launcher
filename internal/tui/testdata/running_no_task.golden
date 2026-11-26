@@ -1,0 +1,20 @@
+
+  ╭────────────────────────────────────╮
+  │  anycli-launcher           v4.0.0  │
+  │  claude                            │
+  ╰────────────────────────────────────╯
+
+  Task sessions
+
+ ▸  1  api/fix-login  running     2h  dirty ↑2 (2 unpushed)
+        Fix the login bug when the session cookie expires mid-r…
+    2  web/add-tests  idle        3d  clean
+        add tests
+    3  work-api/x     finished   45s  ↑1
+    4  cli/gone       unknown     9d  worktree missing
+        old
+
+    Enter open   f finish   r refresh   Esc back
+
+  no task 9
+  › 

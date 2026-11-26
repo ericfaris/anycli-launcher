@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 	case "fakecli":
 		wd, _ := os.Getwd()
 		if log := os.Getenv("FAKECLI_JSON"); log != "" {
-			rec, _ := json.Marshal(map[string]any{"cwd": wd, "args": os.Args[1:], "spawned": os.Getenv("_AC_SPAWNED_TAB")})
+			rec, _ := json.Marshal(map[string]any{"cwd": wd, "args": os.Args[1:], "spawned": os.Getenv("_AC_SPAWNED_TAB"), "pid": os.Getpid()})
 			os.WriteFile(log, rec, 0o644)
 		}
 		if log := os.Getenv("FAKECLI_LOG"); log != "" {

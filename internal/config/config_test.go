@@ -32,7 +32,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		"silent":  {Flags: Str("none")},
 		"empty":   {Flags: Str("")},
 		"v2.core": {CLI: "codex"},
+		"muxed":   {Backend: "tmux"},
 	}
+	in.Backend = "tab"
+	in.Terminal = "kitty"
 	if err := Save(path, in); err != nil {
 		t.Fatal(err)
 	}
@@ -211,11 +214,53 @@ func TestOverlay(t *testing.T) {
 	if err != nil || p.Alias != "Repo" || *p.Flags != "none" || p.CLI != "claude" {
 		t.Fatalf("got %+v %v", p, err)
 	}
-	for _, bad := range []string{`cli = "./evil.sh"`, `cli = "C:\\x\\evil.exe"`, `alias = `} {
+	for _, bad := range []string{`cli = "./evil.sh"`, `cli = "C:\\x\\evil.exe"`, `alias = `,
+		`backend = "sh -c 'touch pwned'"`, `backend = "/bin/tmux"`, `backend = "screen"`, `backend = "Tmux"`} {
 		os.WriteFile(filepath.Join(dir, OverlayFile), []byte(bad+"\n"), 0o644)
 		if _, err := LoadOverlay(dir); err == nil {
 			t.Errorf("want error for %s", bad)
 		}
+	}
+}
+
+func TestOverlayBackend(t *testing.T) {
+	dir := t.TempDir()
+	for _, b := range Backends {
+		os.WriteFile(filepath.Join(dir, OverlayFile), []byte(`backend = "`+b+`"`+"\n"), 0o644)
+		p, err := LoadOverlay(dir)
+		if err != nil || p.Backend != b {
+			t.Fatalf("%s: %+v %v", b, p, err)
+		}
+	}
+	// An overlay may not pick the terminal (global only): unknown key, ignored.
+	os.WriteFile(filepath.Join(dir, OverlayFile), []byte(`terminal = "kitty"`+"\n"), 0o644)
+	if p, err := LoadOverlay(dir); err != nil || !p.IsZero() {
+		t.Fatalf("%+v %v", p, err)
+	}
+}
+
+func TestSettingsBackendPrecedence(t *testing.T) {
+	cfg := Default()
+	cfg.Projects = map[string]Project{"a": {Backend: "here"}}
+	if got := cfg.Settings("a", &Project{Backend: "tmux"}); got.Backend != "here" {
+		t.Fatalf("user config must win: %+v", got)
+	}
+	if got := cfg.Settings("b", &Project{Backend: "tmux"}); got.Backend != "tmux" {
+		t.Fatalf("overlay applies: %+v", got)
+	}
+	if (Project{Backend: "tab"}).IsZero() {
+		t.Fatal("backend counts as set")
+	}
+}
+
+func TestValidBackend(t *testing.T) {
+	for _, b := range append([]string{""}, Backends...) {
+		if !ValidBackend(b) {
+			t.Errorf("%q", b)
+		}
+	}
+	if ValidBackend("screen") || ValidBackend(" tmux") {
+		t.Fatal("invalid accepted")
 	}
 }
 

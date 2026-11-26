@@ -27,26 +27,33 @@ type Project struct {
 	Prompt string  `toml:"prompt,omitempty"`
 	// CLI overrides the global cli for this project.
 	CLI string `toml:"cli,omitempty"`
+	// Backend overrides the global backend for this project. Only the names
+	// in Backends are accepted (an .ac.toml may pick one, never a command).
+	Backend string `toml:"backend,omitempty"`
 }
 
 // IsZero reports whether no field is set.
 func (p Project) IsZero() bool {
-	return p.Alias == "" && p.Flags == nil && p.Color == "" && p.Title == "" && p.Prompt == "" && p.CLI == ""
+	return p.Alias == "" && p.Flags == nil && p.Color == "" && p.Title == "" && p.Prompt == "" && p.CLI == "" && p.Backend == ""
 }
 
 // Config is the on-disk v4 configuration.
 type Config struct {
-	ProjectsDir   string             `toml:"projects_dir"`
-	ExtraDirs     []string           `toml:"extra_dirs,omitempty"`
-	ScanDepth     int                `toml:"scan_depth,omitempty"`
-	CLI           string             `toml:"cli"`
-	CLILaunch     string             `toml:"cli_launch,omitempty"`
-	CLIConfigDir  string             `toml:"cli_config_dir,omitempty"`
-	DefaultFlags  string             `toml:"default_flags,omitempty"`
-	SortOrder     string             `toml:"sort_order,omitempty"` // name | recent (frecent)
-	ShowGitStatus bool               `toml:"show_git_status"`
-	Theme         string             `toml:"theme,omitempty"`
-	Projects      map[string]Project `toml:"projects,omitempty"`
+	ProjectsDir   string   `toml:"projects_dir"`
+	ExtraDirs     []string `toml:"extra_dirs,omitempty"`
+	ScanDepth     int      `toml:"scan_depth,omitempty"`
+	CLI           string   `toml:"cli"`
+	CLILaunch     string   `toml:"cli_launch,omitempty"`
+	CLIConfigDir  string   `toml:"cli_config_dir,omitempty"`
+	DefaultFlags  string   `toml:"default_flags,omitempty"`
+	SortOrder     string   `toml:"sort_order,omitempty"` // name | recent (frecent)
+	ShowGitStatus bool     `toml:"show_git_status"`
+	Theme         string   `toml:"theme,omitempty"`
+	// Backend is how a launch runs: auto (default), here, tab, tmux, zellij.
+	Backend string `toml:"backend,omitempty"`
+	// Terminal forces the tab terminal instead of detecting it.
+	Terminal string             `toml:"terminal,omitempty"`
+	Projects map[string]Project `toml:"projects,omitempty"`
 }
 
 // Default returns the configuration used when no file exists.
@@ -232,6 +239,9 @@ func (c Config) Settings(name string, overlay *Project) Project {
 		if p.CLI != "" {
 			out.CLI = p.CLI
 		}
+		if p.Backend != "" {
+			out.Backend = p.Backend
+		}
 	}
 	return out
 }
@@ -293,6 +303,23 @@ func FrecencySort(order string) bool { return order == "recent" || order == "fre
 func ValidSortOrder(order string) bool {
 	for _, o := range SortOrders {
 		if o == order {
+			return true
+		}
+	}
+	return false
+}
+
+// Backends are the accepted backend names (launch.Backends; a test keeps
+// the two in sync). "" means auto.
+var Backends = []string{"auto", "here", "tab", "tmux", "zellij"}
+
+// ValidBackend reports whether s is "" or one of Backends.
+func ValidBackend(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, b := range Backends {
+		if b == s {
 			return true
 		}
 	}

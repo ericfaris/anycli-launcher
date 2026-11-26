@@ -17,7 +17,8 @@ const OverlayFile = ".ac.toml"
 //
 // The overlay usually comes from a cloned repo, so it is treated as
 // untrusted: `cli` may only name a binary (no path separators), so a repo
-// cannot point the launcher at a script inside itself.
+// cannot point the launcher at a script inside itself, and `backend` must
+// be one of the fixed names in Backends.
 func LoadOverlay(dir string) (*Project, error) {
 	path := filepath.Join(dir, OverlayFile)
 	data, err := os.ReadFile(path)
@@ -33,6 +34,9 @@ func LoadOverlay(dir string) (*Project, error) {
 	}
 	if strings.ContainsAny(p.CLI, `/\`) {
 		return nil, fmt.Errorf("%s: cli must be a command name, not a path (%q)", path, p.CLI)
+	}
+	if !ValidBackend(p.Backend) {
+		return nil, fmt.Errorf("%s: unknown backend %q (use %s)", path, p.Backend, strings.Join(Backends, ", "))
 	}
 	return &p, nil
 }

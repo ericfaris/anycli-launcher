@@ -40,15 +40,31 @@ func (p Project) Label() string {
 // Discover lists projects: each root in order, its subdirectories sorted by
 // name (case-insensitive). Hidden directories are skipped. With
 // scan_depth 2, a directory that is not a git repo but has subdirectories is
-// a grouping folder and its children are listed in its place.
+// a grouping folder and its children are listed in its place. The task
+// worktree folder (worktree_dir) and anything under it are never listed,
+// even when it is configured as a visible folder inside a root. (A
+// worktree_dir that is or contains a root is invalid: doctor reports it,
+// task creation refuses it, and it hides nothing here.)
 func Discover(cfg config.Config) []Project {
 	var out []Project
+	wt := cfg.WorktreeRoot()
+	for _, root := range cfg.Roots() {
+		if inWorktreeRoot(root, wt) {
+			wt = ""
+		}
+	}
 	for _, root := range cfg.Roots() {
 		for _, dir := range subdirs(root) {
+			if inWorktreeRoot(dir, wt) {
+				continue
+			}
 			base := filepath.Base(dir)
 			if cfg.ScanDepth == 2 && !isDir(filepath.Join(dir, ".git")) {
 				if kids := subdirs(dir); len(kids) > 0 {
 					for _, k := range kids {
+						if inWorktreeRoot(k, wt) {
+							continue
+						}
 						out = append(out, newProject(cfg, root, base, k))
 					}
 					continue
@@ -58,6 +74,18 @@ func Discover(cfg config.Config) []Project {
 		}
 	}
 	return out
+}
+
+// inWorktreeRoot reports whether dir is the worktree root or inside it.
+func inWorktreeRoot(dir, wt string) bool {
+	if wt == "" {
+		return false
+	}
+	rel, err := filepath.Rel(wt, dir)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
 }
 
 func newProject(cfg config.Config, root, group, dir string) Project {

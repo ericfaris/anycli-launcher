@@ -52,8 +52,11 @@ type Config struct {
 	// Backend is how a launch runs: auto (default), here, tab, tmux, zellij.
 	Backend string `toml:"backend,omitempty"`
 	// Terminal forces the tab terminal instead of detecting it.
-	Terminal string             `toml:"terminal,omitempty"`
-	Projects map[string]Project `toml:"projects,omitempty"`
+	Terminal string `toml:"terminal,omitempty"`
+	// WorktreeDir holds task worktrees (ac <project> --task); "" means
+	// <projects_dir>/.ac-worktrees. Discovery never lists it.
+	WorktreeDir string             `toml:"worktree_dir,omitempty"`
+	Projects    map[string]Project `toml:"projects,omitempty"`
 }
 
 // Default returns the configuration used when no file exists.
@@ -194,6 +197,19 @@ func (c Config) Roots() []string {
 
 // ProjectsRoot is the primary root (where `ac new` creates projects).
 func (c Config) ProjectsRoot() string { return c.Roots()[0] }
+
+// WorktreeDirName is the default worktree folder under projects_dir. It is
+// hidden, so discovery skips it like any dot folder.
+const WorktreeDirName = ".ac-worktrees"
+
+// WorktreeRoot is where task worktrees live: worktree_dir (expanded,
+// cleaned), else <projects root>/.ac-worktrees.
+func (c Config) WorktreeRoot() string {
+	if c.WorktreeDir != "" {
+		return filepath.Clean(ExpandHome(c.WorktreeDir))
+	}
+	return filepath.Join(c.ProjectsRoot(), WorktreeDirName)
+}
 
 // ProjectKey finds the Projects map key for a directory name: exact first,
 // then case-insensitive. Returns "" when nothing matches.
